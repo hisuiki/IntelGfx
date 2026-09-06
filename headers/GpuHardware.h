@@ -66,6 +66,23 @@ static const uint32 kForcewakeMedia = 0xa270;
 static const uint32 kForcewakeMediaAck = 0x0d88;
 static const uint32 kForcewakeKernel = 1 << 0;
 
+// Render power state. The frequency the GPU runs at is the one the software
+// request asks for, clamped to the limits the part reports. Nothing on a Haiku
+// system writes either, so the request is left as firmware set it, which on a
+// Skylake is below the part's own minimum. The cap reports its three
+// frequencies in steps of 50 MHz; a request is in steps of a third of that.
+static const uint32 kFrequencyCap = 0x145998;		// in the MCHBAR mirror
+static const uint32 kFrequencyRequest = 0xa008;
+static const uint32 kFrequencyRequestShift = 23;
+static const uint32 kFrequencyScaler = 3;
+
+// Shader fuses. These sit in a forcewake domain, so they read back as zero
+// unless the domain is held awake, and the values are constant for the device.
+static const uint32 kFuse2 = 0x9120;
+static const uint32 kFuse2SliceEnableShift = 25;
+static const uint32 kFuse2SubsliceDisableShift = 20;
+static constexpr uint32 kEuDisable(uint32 slice) { return 0x9134 + slice * 4; }
+
 // Interrupts are masked rather than handled: this driver polls.
 static const uint32 kGtInterruptStatus0 = 0x44300;	// raw, whatever is masked
 static const uint32 kGtInterruptMask0 = 0x44304;	// render and blitter

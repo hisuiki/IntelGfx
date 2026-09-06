@@ -2,6 +2,7 @@
 #include "PageTables.h"
 
 #include "GpuHardware.h"
+#include "Cache.h"
 
 #include <string.h>
 #include <util/AutoLock.h>
@@ -199,7 +200,7 @@ PageTables::Map(area_id area, uint64 address)
 {
 	if (!IsValid())
 		return B_NO_INIT;
-	if ((address & kPageMask) != 0)
+	if ((address & kPageMask) != 0 || address >= (1ULL << 48))
 		return B_BAD_VALUE;
 
 	area_info info;
@@ -207,6 +208,8 @@ PageTables::Map(area_id area, uint64 address)
 	if (status != B_OK)
 		return status;
 	uint64 size = ((uint64)info.size + kPageMask) & ~kPageMask;
+	if (size > (1ULL << 48) - address)
+		return B_BAD_VALUE;
 
 	MutexLocker locker(&fLock);
 	for (uint64 offset = 0; offset < size; offset += B_PAGE_SIZE) {
@@ -238,7 +241,9 @@ PageTables::MapPhysical(uint64 address, phys_addr_t physical, uint64 size)
 {
 	if (!IsValid())
 		return B_NO_INIT;
-	if ((address & kPageMask) != 0 || (physical & kPageMask) != 0)
+	if ((address & kPageMask) != 0 || (physical & kPageMask) != 0
+		|| address >= (1ULL << 48) || size > (1ULL << 48) - address
+		|| (size & kPageMask) != 0)
 		return B_BAD_VALUE;
 
 	MutexLocker locker(&fLock);
@@ -266,9 +271,11 @@ PageTables::Unmap(uint64 address, uint64 size)
 {
 	if (!IsValid())
 		return B_NO_INIT;
-	if ((address & kPageMask) != 0)
+	if ((address & kPageMask) != 0 || address >= (1ULL << 48))
 		return B_BAD_VALUE;
 
+	if (size > (1ULL << 48) - address)
+		return B_BAD_VALUE;
 	size = (size + kPageMask) & ~kPageMask;
 	uint64 scratch = (uint64)fScratchPage | kPageEntryPresent
 		| kPageEntryWritable;
@@ -284,6 +291,14 @@ PageTables::Unmap(uint64 address, uint64 size)
 
 	memory_write_barrier();
 	return B_OK;
+}
+
+void
+PageTables::Flush()
+{
+	MutexLocker locker(&fLock);
+	for (uint32 i = 0; i < fTableCount; i++)
+		FlushCpuCache(fTables[i].entries, B_PAGE_SIZE);
 }
 
 }

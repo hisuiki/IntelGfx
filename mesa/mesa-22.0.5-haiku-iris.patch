@@ -1,0 +1,414 @@
+--- a/include/drm-uapi/drm.h
++++ b/include/drm-uapi/drm.h
+@@ -44,7 +44,12 @@
+ #else /* One of the BSDs */
+ 
+ #include <stdint.h>
++#ifdef __HAIKU__
++#include <sys/ioctl.h>
++#include <bsd/sys/ioccom.h>
++#else
+ #include <sys/ioccom.h>
++#endif
+ #include <sys/types.h>
+ typedef int8_t   __s8;
+ typedef uint8_t  __u8;
+--- a/include/drm-uapi/sync_file.h
++++ b/include/drm-uapi/sync_file.h
+@@ -19,6 +19,9 @@
+ 
+ #else /* One of the BSDs */
+ 
++#ifdef __HAIKU__
++#include "drm.h"
++#else
+ #include <sys/types.h>
+ #include <sys/ioccom.h>
+ 
+@@ -30,6 +33,7 @@
+ typedef uint32_t __u32;
+ typedef int64_t  __s64;
+ typedef uint64_t __u64;
++#endif
+ 
+ #endif
+ 
+--- a/meson.build
++++ b/meson.build
+@@ -997,7 +997,7 @@
+ has_mako = run_command(
+   prog_python, '-c',
+   '''
+-from distutils.version import StrictVersion
++from packaging.version import Version as StrictVersion
+ import mako
+ assert StrictVersion(mako.__version__) > StrictVersion("0.8.0")
+   ''', check: false)
+@@ -1610,6 +1610,9 @@
+   # GNU/Hurd includes egl_dri2, without drm.
+   required : (with_dri2 and host_machine.system() != 'gnu') or with_dri3
+ )
++if with_platform_haiku and with_gallium_iris
++  dep_libdrm = declare_dependency(include_directories : include_directories('src/intel/haiku/compat'))
++endif
+ if dep_libdrm.found()
+   pre_args += '-DHAVE_LIBDRM'
+   if with_dri_platform == 'drm' and with_dri
+--- a/src/gallium/drivers/iris/iris_batch.c
++++ b/src/gallium/drivers/iris/iris_batch.c
+@@ -980,7 +980,7 @@
+    int ret = 0;
+    if (!batch->screen->devinfo.no_hw &&
+        intel_ioctl(batch->screen->fd, DRM_IOCTL_I915_GEM_EXECBUFFER2, &execbuf))
+-      ret = -errno;
++      ret = INTEL_NEG_ERRNO;
+ 
+    simple_mtx_unlock(bo_deps_lock);
+ 
+--- a/src/gallium/drivers/iris/iris_bufmgr.c
++++ b/src/gallium/drivers/iris/iris_bufmgr.c
+@@ -486,7 +486,7 @@
+ 
+    ret = intel_ioctl(bufmgr->fd, DRM_IOCTL_SYNCOBJ_WAIT, &args);
+    if (ret != 0) {
+-      ret = -errno;
++      ret = INTEL_NEG_ERRNO;
+       goto out;
+    }
+ 
+@@ -560,7 +560,7 @@
+    assert(iris_bo_is_real(bo));
+ 
+    VG_NOACCESS(bo->real.map, bo->size);
+-   os_munmap(bo->real.map, bo->size);
++   intel_haiku_unmap(bo->real.map, bo->size);
+    bo->real.map = NULL;
+ }
+ 
+@@ -1633,7 +1633,7 @@
+ 
+          if (p_atomic_cmpxchg(&bo->real.map, NULL, map)) {
+             VG_NOACCESS(map, bo->size);
+-            os_munmap(map, bo->size);
++            intel_haiku_unmap(map, bo->size);
+          }
+       }
+       assert(bo->real.map);
+@@ -1674,7 +1674,7 @@
+ 
+    int ret = intel_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_WAIT, &wait);
+    if (ret != 0)
+-      return -errno;
++      return INTEL_NEG_ERRNO;
+ 
+    return 0;
+ }
+@@ -1717,7 +1717,7 @@
+       ret = iris_bo_wait_syncobj(bo, timeout_ns);
+ 
+    if (ret != 0)
+-      return -errno;
++      return INTEL_NEG_ERRNO;
+ 
+    bo->idle = true;
+ 
+@@ -1837,7 +1837,7 @@
+          .tiling_mode = tiling_mode,
+          .stride = surf->row_pitch_B,
+       };
+-      ret = ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_SET_TILING, &set_tiling);
++      ret = intel_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_SET_TILING, &set_tiling);
+    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+ 
+    if (ret) {
+@@ -1972,7 +1972,7 @@
+ 
+    if (drmPrimeHandleToFD(bufmgr->fd, bo->gem_handle,
+                           DRM_CLOEXEC | DRM_RDWR, prime_fd) != 0)
+-      return -errno;
++      return INTEL_NEG_ERRNO;
+ 
+    return 0;
+ }
+@@ -2000,7 +2000,7 @@
+       struct drm_gem_flink flink = { .handle = bo->gem_handle };
+ 
+       if (intel_ioctl(bufmgr->fd, DRM_IOCTL_GEM_FLINK, &flink))
+-         return -errno;
++         return INTEL_NEG_ERRNO;
+ 
+       simple_mtx_lock(&bufmgr->lock);
+       if (!bo->real.global_name) {
+@@ -2192,7 +2192,7 @@
+ 
+    err = 0;
+    if (intel_ioctl(bufmgr->fd, DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, &p))
+-      err = -errno;
++      err = INTEL_NEG_ERRNO;
+ 
+    return err;
+ }
+--- a/src/gallium/drivers/iris/iris_disk_cache.c
++++ b/src/gallium/drivers/iris/iris_disk_cache.c
+@@ -81,7 +81,7 @@
+                       const void *prog_key,
+                       uint32_t prog_key_size)
+ {
+-#ifdef ENABLE_SHADER_CACHE
++#if defined(ENABLE_SHADER_CACHE) && !defined(__HAIKU__)
+    if (!cache)
+       return;
+ 
+@@ -149,7 +149,7 @@
+                          const void *prog_key,
+                          uint32_t key_size)
+ {
+-#ifdef ENABLE_SHADER_CACHE
++#if defined(ENABLE_SHADER_CACHE) && !defined(__HAIKU__)
+    struct disk_cache *cache = screen->disk_cache;
+    gl_shader_stage stage = ish->nir->info.stage;
+ 
+@@ -261,7 +261,7 @@
+ void
+ iris_disk_cache_init(struct iris_screen *screen)
+ {
+-#ifdef ENABLE_SHADER_CACHE
++#if defined(ENABLE_SHADER_CACHE) && !defined(__HAIKU__)
+    if (INTEL_DEBUG(DEBUG_DISK_CACHE_DISABLE_MASK))
+       return;
+ 
+--- a/src/gallium/drivers/iris/iris_screen.c
++++ b/src/gallium/drivers/iris/iris_screen.c
+@@ -147,7 +147,7 @@
+    const struct intel_device_info *devinfo = &screen->devinfo;
+    static char buf[128];
+ 
+-   snprintf(buf, sizeof(buf), "Mesa %s", devinfo->name);
++   snprintf(buf, sizeof(buf), "Mesa %s (Iris / Haiku IntelGfx)", devinfo->name);
+    return buf;
+ }
+ 
+@@ -253,8 +253,6 @@
+    case PIPE_CAP_GL_SPIRV:
+    case PIPE_CAP_GL_SPIRV_VARIABLE_POINTERS:
+    case PIPE_CAP_DEMOTE_TO_HELPER_INVOCATION:
+-   case PIPE_CAP_NATIVE_FENCE_FD:
+-   case PIPE_CAP_MEMOBJ:
+    case PIPE_CAP_MIXED_COLOR_DEPTH_BITS:
+    case PIPE_CAP_FENCE_SIGNAL:
+    case PIPE_CAP_IMAGE_STORE_FORMATTED:
+@@ -352,15 +350,10 @@
+    case PIPE_CAP_MAX_SHADER_PATCH_VARYINGS:
+    case PIPE_CAP_MAX_VARYINGS:
+       return 32;
++   case PIPE_CAP_NATIVE_FENCE_FD:
++   case PIPE_CAP_MEMOBJ:
+    case PIPE_CAP_RESOURCE_FROM_USER_MEMORY:
+-      /* AMD_pinned_memory assumes the flexibility of using client memory
+-       * for any buffer (incl. vertex buffers) which rules out the prospect
+-       * of using snooped buffers, as using snooped buffers without
+-       * cogniscience is likely to be detrimental to performance and require
+-       * extensive checking in the driver for correctness, e.g. to prevent
+-       * illegal snoop <-> snoop transfers.
+-       */
+-      return devinfo->has_llc;
++      return 0;
+    case PIPE_CAP_THROTTLE:
+       return screen->driconf.disable_throttling ? 0 : 1;
+ 
+@@ -664,8 +657,8 @@
+ {
+    struct drm_i915_getparam gp = { .param = param, .value = value };
+ 
+-   if (ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp) == -1)
+-      return -errno;
++   if (intel_ioctl(fd, DRM_IOCTL_I915_GETPARAM, &gp) == -1)
++      return INTEL_NEG_ERRNO;
+ 
+    return 0;
+ }
+@@ -782,6 +775,7 @@
+ 
+    if (!intel_get_device_info_from_fd(fd, &screen->devinfo))
+       return NULL;
++   if (screen->devinfo.no_hw) { ralloc_free(screen); return NULL; }
+    screen->pci_id = screen->devinfo.pci_device_id;
+ 
+    p_atomic_set(&screen->refcount, 1);
+@@ -789,11 +783,11 @@
+    if (screen->devinfo.ver < 8 || screen->devinfo.platform == INTEL_PLATFORM_CHV)
+       return NULL;
+ 
+-   driParseConfigFiles(config->options, config->options_info, 0, "iris",
++   if (config) driParseConfigFiles(config->options, config->options_info, 0, "iris",
+                        NULL, NULL, NULL, 0, NULL, 0);
+ 
+    bool bo_reuse = false;
+-   int bo_reuse_mode = driQueryOptioni(config->options, "bo_reuse");
++   int bo_reuse_mode = (config ? driQueryOptioni(config->options, "bo_reuse") : DRI_CONF_BO_REUSE_ALL);
+    switch (bo_reuse_mode) {
+    case DRI_CONF_BO_REUSE_DISABLED:
+       break;
+@@ -823,13 +817,13 @@
+       return NULL;
+ 
+    screen->driconf.dual_color_blend_by_location =
+-      driQueryOptionb(config->options, "dual_color_blend_by_location");
++      (config && driQueryOptionb(config->options, "dual_color_blend_by_location"));
+    screen->driconf.disable_throttling =
+-      driQueryOptionb(config->options, "disable_throttling");
++      (config && driQueryOptionb(config->options, "disable_throttling"));
+    screen->driconf.always_flush_cache =
+-      driQueryOptionb(config->options, "always_flush_cache");
++      (config && driQueryOptionb(config->options, "always_flush_cache"));
+    screen->driconf.sync_compile =
+-      driQueryOptionb(config->options, "sync_compile");
++      (config && driQueryOptionb(config->options, "sync_compile"));
+ 
+    screen->precompile = env_var_as_boolean("shader_precompile", true);
+ 
+--- a/src/gallium/drivers/iris/iris_utrace.c
++++ b/src/gallium/drivers/iris/iris_utrace.c
+@@ -103,13 +103,17 @@
+ {
+    struct iris_screen *screen = (struct iris_screen *)ice->ctx.screen;
+ 
+-   struct stat st;
+    uint32_t minor;
+ 
++#ifdef __HAIKU__
++   minor = 0;
++#else
++   struct stat st;
+    if (fstat(screen->fd, &st) == 0)
+       minor = minor(st.st_rdev);
+    else
+       minor = 0;
++#endif
+ 
+    /* We could be dealing with /dev/dri/card0 or /dev/dri/renderD128 so to get
+     * a GPU ID we % 128 the minor number.
+--- a/src/gallium/frontends/hgl/hgl.c
++++ b/src/gallium/frontends/hgl/hgl.c
+@@ -16,6 +16,7 @@
+ #include "util/format/u_format.h"
+ #include "util/u_memory.h"
+ #include "util/u_inlines.h"
++#include "state_tracker/st_context.h"
+ #include "state_tracker/st_gl_api.h" /* for st_gl_api_create */
+ 
+ #include "GLView.h"
+@@ -72,7 +73,7 @@
+ 		return true;
+ 
+ 	// TODO: pipe_context here??? Might be needed for hw renderers
+-	buffer->screen->flush_frontbuffer(buffer->screen, NULL, ptex, 0, 0,
++	buffer->screen->flush_frontbuffer(buffer->screen, ((struct st_context*)stctxi)->pipe, ptex, 0, 0,
+ 		buffer->winsysContext, NULL);
+ 
+ 	return true;
+--- a/src/gallium/meson.build
++++ b/src/gallium/meson.build
+@@ -217,7 +217,12 @@
+ endif
+ if with_platform_haiku
+   subdir('frontends/hgl')
+-  subdir('targets/haiku-softpipe')
++  if with_gallium_softpipe
++    subdir('targets/haiku-softpipe')
++  endif
++  if with_gallium_iris
++    subdir('targets/haiku-iris')
++  endif
+ endif
+ if with_gallium_st_nine
+   subdir('frontends/nine')
+--- a/src/hgl/meson.build
++++ b/src/hgl/meson.build
+@@ -26,7 +26,7 @@
+   link_args : [ld_args_bsymbolic, ld_args_gc_sections],
+   include_directories : [
+     inc_src, inc_mapi, inc_mesa, inc_include, inc_glapi, inc_haikugl,
+-    include_directories('/system/develop/headers/private')
++
+   ],
+   link_with : [libglapi_static, libglapi],
+   dependencies : cpp.find_library('be'),
+--- a/src/intel/common/intel_gem.h
++++ b/src/intel/common/intel_gem.h
+@@ -33,6 +33,22 @@
+ #include <stdlib.h>
+ #include <unistd.h>
+ #include <sys/ioctl.h>
++#ifdef __HAIKU__
++#include "intel_haiku.h"
++#endif
++
++/* Mesa reports a failed device call by negating errno and testing the result
++ * for being negative. Haiku's errno values are themselves large negative
++ * numbers, so negating one produces a positive value and every such test reads
++ * the failure as success. Negating only a positive errno leaves the sign the
++ * callers expect on either system, and leaves errno itself untouched so that
++ * the comparisons against individual E-codes keep working.
++ */
++#ifdef __HAIKU__
++#define INTEL_NEG_ERRNO (errno < 0 ? errno : -errno)
++#else
++#define INTEL_NEG_ERRNO (-errno)
++#endif
+ 
+ static inline uint64_t
+ intel_canonical_address(uint64_t v)
+@@ -71,7 +87,11 @@
+     int ret;
+ 
+     do {
++#ifdef __HAIKU__
++        ret = intel_haiku_ioctl(fd, request, arg);
++#else
+         ret = ioctl(fd, request, arg);
++#endif
+     } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+     return ret;
+ }
+@@ -114,7 +134,7 @@
+ 
+    int ret = intel_ioctl(fd, DRM_IOCTL_I915_QUERY, &args);
+    if (ret != 0)
+-      return -errno;
++      return INTEL_NEG_ERRNO;
+    else if (item.length < 0)
+       return item.length;
+ 
+--- a/src/intel/dev/intel_device_info.c
++++ b/src/intel/dev/intel_device_info.c
+@@ -1605,7 +1605,7 @@
+          .stride = 512,
+       };
+ 
+-      ret = ioctl(fd, DRM_IOCTL_I915_GEM_SET_TILING, &set_tiling);
++      ret = intel_ioctl(fd, DRM_IOCTL_I915_GEM_SET_TILING, &set_tiling);
+    } while (ret == -1 && (errno == EINTR || errno == EAGAIN));
+ 
+    if (ret != 0) {
+--- a/src/intel/perf/intel_perf.c
++++ b/src/intel/perf/intel_perf.c
+@@ -70,6 +70,10 @@
+ static bool
+ get_sysfs_dev_dir(struct intel_perf_config *perf, int fd)
+ {
++#ifdef __HAIKU__
++   perf->sysfs_dev_dir[0] = '\0';
++   return false;
++#else
+    struct stat sb;
+    int min, maj;
+    DIR *drmdir;
+@@ -130,6 +134,7 @@
+        maj, min);
+ 
+    return false;
++#endif
+ }
+ 
+ static bool

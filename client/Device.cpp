@@ -89,6 +89,79 @@ status_t Device::Wait(uint64 fence, bigtime_t timeout) const
 	return ioctl(fFD, kWaitFence, &request, sizeof(request)) < 0 ? errno : B_OK;
 }
 
+status_t Device::CreateRenderContext(uint32& context) const
+{
+	CreateContext request = Request<CreateContext>();
+	if (ioctl(fFD, kCreateContext, &request, sizeof(request)) < 0)
+		return errno;
+	context = request.context;
+	return B_OK;
+}
+
+status_t Device::DestroyRenderContext(uint32 context) const
+{
+	DestroyContext request = Request<DestroyContext>();
+	request.context = context;
+	return ioctl(fFD, kDestroyContext, &request, sizeof(request)) < 0
+		? errno : B_OK;
+}
+
+status_t Device::BindVirtual(uint32 handle, uint64 address) const
+{
+	IntelGfx::BindVirtual request = Request<IntelGfx::BindVirtual>();
+	request.handle = handle;
+	request.address = address;
+	return ioctl(fFD, kBindVirtual, &request, sizeof(request)) < 0
+		? errno : B_OK;
+}
+
+status_t Device::UnbindVirtual(uint32 handle) const
+{
+	UnbindBuffer request = Request<UnbindBuffer>();
+	request.handle = handle;
+	return ioctl(fFD, kUnbindVirtual, &request, sizeof(request)) < 0
+		? errno : B_OK;
+}
+
+status_t Device::SubmitObjects(uint32 context, uint32 batchHandle,
+	uint64 offset, uint64 length, const uint32* handles, uint32 count,
+	uint64& fence) const
+{
+	IntelGfx::SubmitObjects request = Request<IntelGfx::SubmitObjects>();
+	if (handles == NULL || count == 0 || count > kMaxBuffers)
+		return B_BAD_VALUE;
+	request.context = context;
+	request.batchHandle = batchHandle;
+	request.offset = offset;
+	request.length = length;
+	request.count = count;
+	for (uint32 i = 0; i < count; i++)
+		request.handles[i] = handles[i];
+	if (ioctl(fFD, kSubmitObjects, &request, sizeof(request)) < 0)
+		return errno;
+	fence = request.fence;
+	return B_OK;
+}
+
+status_t Device::WaitRender(uint64 fence, bigtime_t timeout) const
+{
+	WaitFence request = Request<WaitFence>();
+	request.fence = fence;
+	request.timeout = (uint64)timeout;
+	return ioctl(fFD, kWaitRenderFence, &request, sizeof(request)) < 0
+		? errno : B_OK;
+}
+
+status_t Device::Cache(uint32 handle, uint64 offset, uint64 length) const
+{
+	CacheBuffer request = Request<CacheBuffer>();
+	request.handle = handle;
+	request.offset = offset;
+	request.length = length;
+	return ioctl(fFD, kCacheBuffer, &request, sizeof(request)) < 0
+		? errno : B_OK;
+}
+
 status_t Device::Status(EngineStatus& status, uint32 flags) const
 {
 	status = Request<EngineStatus>();

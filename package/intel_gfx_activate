@@ -14,6 +14,9 @@ base=$(finddir B_USER_NONPACKAGED_ADDONS_DIRECTORY)/kernel/drivers
 binary=$base/bin/intel_extreme
 device=$base/dev/graphics/intel_extreme
 target=/boot/system/data/intel_gfx/kernel/intel_gfx
+renderer_base=$(finddir B_USER_NONPACKAGED_ADDONS_DIRECTORY)/opengl
+renderer=$renderer_base/Intel\ Gallium
+renderer_target=/boot/system/data/intel_gfx/opengl/Intel\ Gallium
 
 owned_link()
 {
@@ -27,10 +30,16 @@ case "${1:-status}" in
 		else
 			echo "IntelGfx is not selected by this tool."
 		fi
+		if owned_link "$renderer" "$renderer_target"; then
+			echo "Intel Iris OpenGL is selected for new applications."
+		else
+			echo "Intel Iris OpenGL is not selected by this tool."
+		fi
 		echo "Use intel_gfx_ctl list to inspect the currently loaded driver."
 		;;
 	enable)
 		[ -f "$target" ] || { echo "Install the IntelGfx HPKG first." >&2; exit 1; }
+		[ -f "$renderer_target" ] || { echo "The Intel Iris renderer is missing from the HPKG." >&2; exit 1; }
 		for path in "$binary" "$device"; do
 			if [ -e "$path" ] || [ -L "$path" ]; then
 				if [ "$path" = "$binary" ]; then expected=$target; else expected=../../bin/intel_extreme; fi
@@ -39,17 +48,25 @@ case "${1:-status}" in
 				}
 			fi
 		done
+		if [ -e "$renderer" ] || [ -L "$renderer" ]; then
+			owned_link "$renderer" "$renderer_target" || {
+				echo "Refusing to replace existing OpenGL add-on: $renderer" >&2; exit 1;
+			}
+		fi
 		mkdir -p "$base/bin" "$base/dev/graphics"
+		mkdir -p "$renderer_base"
 		owned_link "$binary" "$target" || ln -s "$target" "$binary"
 		owned_link "$device" ../../bin/intel_extreme || ln -s ../../bin/intel_extreme "$device"
-		echo "IntelGfx selected. Reboot to load the kernel driver and accelerant."
+		owned_link "$renderer" "$renderer_target" || ln -s "$renderer_target" "$renderer"
+		echo "IntelGfx and Intel Iris OpenGL selected. Reboot to load the kernel driver."
 		;;
 	disable)
+		if owned_link "$renderer" "$renderer_target"; then rm "$renderer"; fi
 		if owned_link "$device" ../../bin/intel_extreme && owned_link "$binary" "$target"; then
 			rm "$device"
 		fi
 		if owned_link "$binary" "$target"; then rm "$binary"; fi
-		echo "IntelGfx override removed. Reboot to restore the packaged Intel driver."
+		echo "IntelGfx and Intel Iris overrides removed. Reboot to restore the packaged driver."
 		;;
 	*)
 		echo "Usage: intel_gfx_activate [status|enable|disable]" >&2

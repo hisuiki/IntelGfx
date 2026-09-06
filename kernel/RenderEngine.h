@@ -48,9 +48,14 @@ public:
 	~RenderEngine();
 
 	status_t Init(addr_t registers, GlobalGTT& gtt,
-		const EngineDescriptor& engine);
+		const EngineDescriptor& engine, RenderEngine* scheduler = NULL,
+		PageTables* addressSpace = NULL, uint16 device = 0, uint8 revision = 0);
+	status_t InitClient(GlobalGTT& gtt, RenderEngine& scheduler,
+		PageTables* addressSpace = NULL);
+	bool IsFaulted() const { return fFaulted; }
 	const char* Name() const { return fEngine->name; }
-	bool IsReady() const { return fReady; }
+	bool IsReady() const
+		{ return fReady && !fFaulted && !fScheduler->fFaulted; }
 
 	// Client buffers are mapped into the engine's page tables at the same
 	// address their global mapping uses, so one address means the same thing
@@ -66,6 +71,15 @@ public:
 	status_t Status(EngineStatus& status);
 	uint64 CompletedFence();
 
+	// Decoded once at device init, under forcewake, and shared by every
+	// client of the device.
+	const Topology& ShaderTopology() const { return fScheduler->fTopology; }
+
+	// GPU time this context has run for, and the total across every context
+	// the engine has run, both in command streamer timestamp ticks.
+	uint64 GpuTicks() const { return fGpuTicks; }
+	uint64 TotalGpuTicks() const { return fScheduler->fTotalGpuTicks; }
+
 private:
 	RenderEngine(const RenderEngine&) = delete;
 	RenderEngine& operator=(const RenderEngine&) = delete;
@@ -74,13 +88,26 @@ private:
 	void _Write(uint32 offset, uint32 value);
 	status_t _Forcewake(bool take);
 	void _InitContext();
+	void _InitRenderWorkarounds();
+	void _AppendRenderWorkarounds(uint32* ring, uint32& at) const;
 	void _UpdateTail(uint32 tail);
 	uint32 _Seqno();
 	status_t _WaitSeqno(uint32 seqno, bigtime_t timeout);
+	status_t _WaitContextSaved(bigtime_t timeout);
+	void _ReadTopology();
+	void _RequestMaximumFrequency();
+	status_t _ForcewakeGt(bool take);
 
 	addr_t fRegisters;
 	const EngineDescriptor* fEngine;
 	bool fReady;
+	bool fFaulted;
+	RenderEngine* fScheduler;
+	PageTables* fAddressSpace;
+	Topology fTopology;
+	uint64 fGpuTicks;
+	uint64 fTotalGpuTicks;		// scheduler only: every context on this engine
+	uint32 fLastTimestamp;
 
 	BufferObject fStatusPage;	// the engine's own status page
 	BufferObject fFencePage;	// where a submission writes its sequence number
@@ -93,6 +120,8 @@ private:
 	uint32 fRingSize;
 	uint32 fRingTail;
 	uint32 fNextSeqno;
+	uint16 fDevice;
+	uint8 fRevision;
 	mutex fLock;
 };
 

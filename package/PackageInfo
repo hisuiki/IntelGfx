@@ -1,8 +1,8 @@
 name intel_gfx
-version 0.1.0-1
+version 0.2.0-1
 architecture x86_64
-summary "Experimental modular Intel graphics driver and device service"
-description "IntelGfx display driver, versioned buffer interface, device service and diagnostics. GPU rendering is under development. Driver activation is explicit."
+summary "Experimental Intel display and Iris OpenGL graphics driver"
+description "IntelGfx display driver, isolated GPU contexts, native command submission, Mesa Iris OpenGL renderer, device service and diagnostics. Driver activation is explicit."
 packager "IntelGfx contributors"
 vendor "IntelGfx contributors"
 copyrights {
@@ -11,10 +11,12 @@ copyrights {
 }
 licenses { "IntelGfx" }
 provides {
-	intel_gfx = 0.1.0
-	cmd:intel_gfx_ctl = 0.1.0
-	cmd:intel_gfx_activate = 0.1.0
+	intel_gfx = 0.2.0
+	mesa_iris = 22.0.5
+	cmd:intel_gfx_ctl = 0.2.0
+	cmd:intel_gfx_activate = 0.2.0
 }
 requires {
 	haiku
+	mesa == 22.0.5 base
 }

@@ -336,6 +336,69 @@ static status_t SubmitTest(Device& device, bool render)
 }
 
 
+// Exercises the native contract Iris uses, without involving the GL state
+// tracker: a private address space, a fresh logical context, two fixed BO
+// mappings, one render submission, and a userspace-visible completion fence.
+static status_t NativeTest(Device& device)
+{
+	DeviceInfo info;
+	status_t status = device.GetInfo(info);
+	if (status != B_OK)
+		return status;
+	if ((info.capabilities & kNativeRender) == 0) {
+		fputs("This device does not expose the native Iris render ABI.\n", stderr);
+		return B_NOT_SUPPORTED;
+	}
+
+	MappedBuffer target(device);
+	status = target.Init(B_PAGE_SIZE);
+	if (status != B_OK)
+		return status;
+	MappedBuffer batch(device);
+	status = batch.Init(B_PAGE_SIZE);
+	if (status != B_OK)
+		return status;
+
+	const uint64 targetAddress = 0x100000;
+	const uint64 batchAddress = 0x200000;
+	status = device.BindVirtual(target.Handle(), targetAddress);
+	if (status != B_OK)
+		return status;
+	status = device.BindVirtual(batch.Handle(), batchAddress);
+	if (status != B_OK)
+		return status;
+
+	const uint32 kValue = 0x69726973; // "iris"
+	uint32* commands = (uint32*)batch.Address();
+	commands[0] = kMiStoreDataImmediate;
+	commands[1] = (uint32)targetAddress;
+	commands[2] = (uint32)(targetAddress >> 32);
+	commands[3] = kValue;
+	commands[4] = kMiBatchBufferEnd;
+
+	uint32 context = 0;
+	status = device.CreateRenderContext(context);
+	if (status != B_OK)
+		return status;
+	uint32 handles[] = {batch.Handle(), target.Handle()};
+	uint64 fence = 0;
+	status = device.SubmitObjects(context, batch.Handle(), 0,
+		5 * sizeof(uint32), handles, B_COUNT_OF(handles), fence);
+	if (status == B_OK)
+		status = device.WaitRender(fence, 2000000);
+	status_t destroyed = device.DestroyRenderContext(context);
+	if (status == B_OK)
+		status = destroyed;
+	if (status != B_OK)
+		return status;
+	if (*(volatile uint32*)target.Address() != kValue)
+		return B_BAD_DATA;
+
+	puts("PASS: isolated render context, fixed PPGTT mappings, multi-BO batch, fence.");
+	return B_OK;
+}
+
+
 // What the display side of the hardware reports about its outputs, read
 // straight from the registers rather than from what the accelerant decided
 // at boot. Hot plug status is live, so this also answers whether a screen is
@@ -602,6 +665,33 @@ static status_t Brightness(const char* value)
 }
 
 
+static status_t Activity(const Device& device)
+{
+	auto activity = Request<GpuActivity>();
+	status_t status = device.Ioctl(kGpuActivity, &activity);
+	if (status != B_OK)
+		return status;
+	printf("GPU Activity (total ticks: %" B_PRIu64 ", clock: %" B_PRIu32 " Hz):\n",
+		activity.totalTicks, activity.timestampHz);
+	printf("  Clients (%u active):\n", activity.count);
+	for (uint32 i = 0; i < activity.count; i++) {
+		const ActivityClient& c = activity.clients[i];
+		team_info info;
+		const char* name = "unknown";
+		if (get_team_info(c.team, &info) == B_OK)
+			name = info.args;
+		printf("    [%u] Team: %" B_PRId32 " (%s), Contexts: %u, Ticks: %" B_PRIu64 "\n",
+			i, c.team, name, c.contexts, c.ticks);
+	}
+	uint32 statusReg = 0;
+	if (device.Read(0xa01c, statusReg) == B_OK) {
+		uint32 mhz = ((statusReg >> 23) & 0x1ff) * 50 / 3;
+		printf("  Current frequency: %u MHz\n", mhz);
+	}
+	return B_OK;
+}
+
+
 int main(int argc, char** argv)
 {
 	status_t status = B_BAD_VALUE;
@@ -629,11 +719,14 @@ int main(int argc, char** argv)
 		|| strcmp(argv[1], "buffer-test") == 0
 		|| strcmp(argv[1], "gtt-test") == 0
 		|| strcmp(argv[1], "submit-test") == 0
+		|| strcmp(argv[1], "native-test") == 0
+		|| strcmp(argv[1], "register") == 0
 		|| strcmp(argv[1], "engine-status") == 0
 		|| strcmp(argv[1], "displays") == 0
 		|| strcmp(argv[1], "fill-test") == 0
 		|| strcmp(argv[1], "bench") == 0
-		|| strcmp(argv[1], "vblank") == 0)) {
+		|| strcmp(argv[1], "vblank") == 0
+		|| strcmp(argv[1], "activity") == 0)) {
 		Device device;
 		status = device.Open(argv[2]);
 		if (status == B_OK) {
@@ -641,6 +734,8 @@ int main(int argc, char** argv)
 				status = BufferTest(device, argv[2]);
 			else if (strcmp(argv[1], "gtt-test") == 0)
 				status = GttTest(device, argv[2]);
+			else if (strcmp(argv[1], "native-test") == 0)
+				status = NativeTest(device);
 			else if (strcmp(argv[1], "submit-test") == 0)
 				status = SubmitTest(device, argc > 3
 					&& strcmp(argv[3], "render") == 0);
@@ -652,12 +747,28 @@ int main(int argc, char** argv)
 				status = Bench(device);
 			else if (strcmp(argv[1], "vblank") == 0)
 				status = Vblank(device);
+			else if (strcmp(argv[1], "activity") == 0)
+				status = Activity(device);
 			else if (strcmp(argv[1], "engine-status") == 0) {
 				EngineStatus engine;
 				status = device.Status(engine, argc > 3
 					&& strcmp(argv[3], "render") == 0 ? kUseRenderEngine : 0);
 				if (status == B_OK)
 					PrintEngineStatus(engine);
+			}
+			else if (strcmp(argv[1], "register") == 0) {
+				if (argc != 4) {
+					status = B_BAD_VALUE;
+				} else {
+					char* end = NULL;
+					unsigned long offset = strtoul(argv[3], &end, 0);
+					uint32 value = 0;
+					if (*argv[3] == '\0' || end == NULL || *end != '\0'
+						|| offset > UINT32_MAX)
+						status = B_BAD_VALUE;
+					else if ((status = device.Read((uint32)offset, value)) == B_OK)
+						printf("0x%08" B_PRIx32 "\n", value);
+				}
 			}
 			else {
 				DeviceInfo info;
@@ -669,8 +780,11 @@ int main(int argc, char** argv)
 	} else {
 		fprintf(stderr, "Usage: %s list | service-info | info DEVICE"
 			" | buffer-test DEVICE | gtt-test DEVICE"
+			" | native-test DEVICE"
+			" | register DEVICE OFFSET"
 			" | submit-test DEVICE [render] | engine-status DEVICE [render]"
 			" | displays DEVICE | fill-test DEVICE | vblank DEVICE"
+			" | activity DEVICE"
 			" | brightness [0..1]\n", argv[0]);
 		return 2;
 	}

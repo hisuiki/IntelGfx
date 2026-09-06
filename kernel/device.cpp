@@ -214,7 +214,8 @@ create_engine(intel_info& info, IntelGfx::GlobalGTT& gtt,
 	if (engine == NULL)
 		return NULL;
 
-	status_t status = engine->Init(info.registers, gtt, descriptor);
+	status_t status = engine->Init(info.registers, gtt, descriptor, NULL, NULL,
+		info.pci->device_id, info.pci->revision);
 	if (status != B_OK) {
 		TRACE("no %s engine: %s\n", descriptor.name, strerror(status));
 		delete engine;
@@ -298,6 +299,11 @@ static void
 uninit_device(intel_info& info)
 {
 	// Called with gLock held, for a device whose last user is going away.
+	// A wedged engine may still DMA into its quarantined client context.
+	// Keep the GGTT and MMIO ownership as well until reboot/reset exists.
+	if ((info.engine != NULL && info.engine->IsFaulted())
+		|| (info.render_engine != NULL && info.render_engine->IsFaulted()))
+		return;
 	// The engine goes first: it holds mappings in the page tables below it.
 	delete info.render_engine;
 	info.render_engine = NULL;

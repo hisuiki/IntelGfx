@@ -23,6 +23,19 @@ public:
 	status_t Ioctl(uint32 operation, void* userBuffer, size_t length);
 private:
 	BufferObject* _Find(uint32 handle, uint32* _slot = NULL) const;
+	status_t _NativeIoctl(uint32 operation, void* userBuffer, size_t length);
+	status_t _UnmapVirtual(uint32 slot);
+	bool _IsCoherent() const;
+	uint64 _GpuTicks() const;
+
+	// Every open client of the device, so that one of them can report what the
+	// others are asking the GPU to do.
+	static RenderClient* sClients[kMaxActivityClients];
+	static mutex sClientsLock;
+	int32 fTeam;
+	void _FlushObjects(const SubmitObjects& request);
+	struct NativeState;
+	NativeState* fNative;
 
 	intel_info* fDevice;
 	DeviceInfo fInfo;

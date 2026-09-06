@@ -2,32 +2,18 @@
 #include "RenderEngine.h"
 
 #include "GpuHardware.h"
+#include "Cache.h"
 
 #include <string.h>
 #include <util/AutoLock.h>
 
 namespace IntelGfx {
 
-// The GPU reads the context image and the ring out of ordinary cached memory.
-// Haiku's kernel exports no way to write those lines back, so it is done here
-// directly; a store fence alone would only order them, not land them.
-static void
-FlushRange(const void* address, size_t size)
-{
-	const uint8* line = (const uint8*)((addr_t)address & ~(addr_t)63);
-	const uint8* end = (const uint8*)address + size;
-	for (; line < end; line += 64)
-		asm volatile("clflush %0" : : "m" (*line) : "memory");
-	asm volatile("sfence" ::: "memory");
-}
-
-
 static const uint32 kRingSize = 16 * 1024;
 static const uint32 kContextSize = 4 * B_PAGE_SIZE;
 static const uint32 kStateOffset = B_PAGE_SIZE;	// the register image follows
 												// the context's status page
 static const uint32 kFenceOffset = 0x100;		// eight byte aligned, bit 5 clear
-static const uint64 kContextId = 0x20;
 static const bigtime_t kForcewakeTimeout = 50000;
 static const bigtime_t kIdleTimeout = 1000000;
 static const bigtime_t kSpinTimeout = 2000;
@@ -186,18 +172,104 @@ RenderEngine::RenderEngine()
 	fRegisters(0),
 	fEngine(&kBlitterEngine),
 	fReady(false),
+	fFaulted(false),
+	fScheduler(this),
+	fAddressSpace(&fPageTables),
 	fRegisterState(NULL),
 	fRingSize(kRingSize),
 	fRingTail(0),
-	fNextSeqno(1)
+	fNextSeqno(1),
+	fGpuTicks(0),
+	fTotalGpuTicks(0),
+	fLastTimestamp(0),
+	fDevice(0),
+	fRevision(0)
 {
 	mutex_init(&fLock, "intel_gfx engine");
 }
 
 
+void
+RenderEngine::_InitRenderWorkarounds()
+{
+	if (!fEngine->usesPipeControl)
+		return;
+
+	// Gen9 GT workarounds required before a 3D context runs. These mirror
+	// i915's SKL/KBL programming: coherent LLC compression settings, safe
+	// HDC invalidation, and clock/decompression controls.
+	_Write(0x4090, _Read(0x4090) | (1 << 25) | (1 << 8));
+	_Write(0x4ddc, _Read(0x4ddc) | (1u << 31) | (1 << 27));
+	_Write(0x940c, _Read(0x940c) | (1 << 14));
+	bool kabyLake = (fDevice & 0xff00) == 0x5900;
+	bool skyLakeH0 = (fDevice & 0xff00) == 0x1900 && fRevision >= 7;
+	if (kabyLake || skyLakeH0)
+		_Write(0x4ab0, _Read(0x4ab0) | (1 << 18));
+	if (kabyLake && fRevision <= 1)
+		_Write(0x4ab8, _Read(0x4ab8) | (1 << 28));
+
+	// Render-engine workarounds live outside the logical context image.
+	_Write(0x20e0, (1 << 30) | (1 << 14));
+	_Write(0xb004, _Read(0xb004) | (1 << 7));
+	_Write(0x20d4, (1 << 18) | (1 << 2));
+	_Write(0xb11c, _Read(0xb11c) | (1 << 2));
+	_Write(0xb118, _Read(0xb118) | (1 << 21));
+
+	// Iris programs these context registers from its batches. The command
+	// parser permits them only when the render engine's nonprivileged list
+	// names them explicitly.
+	static const uint32 kNonPrivileged[] = {
+		0x2248, 0x2580, 0x7304, 0x7014, 0xb118
+	};
+	for (uint32 i = 0; i < 12; i++) {
+		uint32 allowed = i < B_COUNT_OF(kNonPrivileged)
+			? kNonPrivileged[i] : fEngine->base + 0x94;
+		_Write(fEngine->base + 0x4d0 + i * 4, allowed);
+	}
+}
+
+
+static inline void
+AppendMaskedRegister(uint32* ring, uint32& at, uint32 reg, uint32 mask,
+	uint32 value)
+{
+	ring[at++] = kMiLoadRegisterImmediate | 1;
+	ring[at++] = reg;
+	ring[at++] = (mask << 16) | value;
+}
+
+
+void
+RenderEngine::_AppendRenderWorkarounds(uint32* ring, uint32& at) const
+{
+	// Context workarounds have to execute after restore and before client
+	// commands. Masked writes preserve every unrelated register bit.
+	uint32 commonSlice = 1 << 13;
+	if ((fDevice & 0xff00) == 0x5900 && fRevision >= 2)
+		commonSlice |= 1 << 8;
+	AppendMaskedRegister(ring, at, 0x7014, commonSlice, commonSlice);
+	AppendMaskedRegister(ring, at, 0xe194,
+		(1 << 8) | (1 << 4) | (1 << 2),
+		(1 << 8) | (1 << 4) | (1 << 2));
+	AppendMaskedRegister(ring, at, 0xe4f0, (1 << 15) | (1 << 8),
+		(1 << 15) | (1 << 8));
+	AppendMaskedRegister(ring, at, 0x7004, (1 << 6) | (1 << 1),
+		(1 << 6) | (1 << 1));
+	AppendMaskedRegister(ring, at, 0xe188, 1 << 3, 0);
+	AppendMaskedRegister(ring, at, 0x7300,
+		(1 << 15) | (1 << 5) | (1 << 4),
+		(1 << 15) | (1 << 5) | (1 << 4));
+	AppendMaskedRegister(ring, at, 0xe184, 1 << 1, 1 << 1);
+	AppendMaskedRegister(ring, at, 0xe180, 1 << 13, 1 << 13);
+	AppendMaskedRegister(ring, at, 0x2580, 7, 4);
+	if ((fDevice & 0xff00) == 0x5900)
+		AppendMaskedRegister(ring, at, 0xe100, 1 << 4, 1 << 4);
+}
+
+
 RenderEngine::~RenderEngine()
 {
-	if (fReady) {
+	if (fReady && fScheduler == this) {
 		// Leave the engine as it was found: no execution list, and nothing
 		// pointing at memory that is about to be freed.
 		if (_Forcewake(true) == B_OK) {
@@ -263,9 +335,9 @@ RenderEngine::_InitContext()
 	fRegisterState[kStateBatchBufferState] = kBatchBufferPerProcessGtt;
 	fRegisterState[kStateTimestamp] = 0;
 	fRegisterState[kStatePageDirectory0Upper]
-		= (uint32)((uint64)fPageTables.Root() >> 32);
+		= (uint32)((uint64)fAddressSpace->Root() >> 32);
 	fRegisterState[kStatePageDirectory0Lower]
-		= (uint32)fPageTables.Root();
+		= (uint32)fAddressSpace->Root();
 	// The ring must not come back stopped.
 	fRegisterState[kStateMiMode + 1] = Masked(kStopRing, false);
 }
@@ -273,11 +345,16 @@ RenderEngine::_InitContext()
 
 status_t
 RenderEngine::Init(addr_t registers, GlobalGTT& gtt,
-	const EngineDescriptor& engine)
+	const EngineDescriptor& engine, RenderEngine* scheduler,
+	PageTables* addressSpace, uint16 device, uint8 revision)
 {
 	if (fReady)
 		return B_BUSY;
 	fEngine = &engine;
+	fScheduler = scheduler != NULL ? scheduler : this;
+	fAddressSpace = addressSpace != NULL ? addressSpace : &fPageTables;
+	fDevice = device;
+	fRevision = revision;
 	if (registers == 0 || !gtt.IsValid())
 		return B_NOT_SUPPORTED;
 
@@ -302,11 +379,30 @@ RenderEngine::Init(addr_t registers, GlobalGTT& gtt,
 		}
 	}
 
-	status_t status = fPageTables.Init();
+	status_t status = fAddressSpace->IsValid() ? B_OK : fAddressSpace->Init();
 	if (status != B_OK)
 		return status;
 
 	_InitContext();
+	if (fEngine->usesPipeControl) {
+		status = _Forcewake(true);
+		if (status != B_OK) { _Forcewake(false); return status; }
+		uint32 fuse = _Read(0x9120);
+		uint32 slices = __builtin_popcount((fuse >> 25) & 7);
+		// Gen9 RPCS must request EU enablement explicitly after power gating.
+		uint32 power = (1u << 31) | (8 << 4) | 8;
+		if (slices > 1)
+			power |= (1 << 18) | (slices << 15);
+		fRegisterState[0x42 + 1] = power;
+		if (fScheduler == this)
+			_InitRenderWorkarounds();
+		_Forcewake(false);
+	}
+	FlushCpuCache(fContext.Address(), fContext.Size());
+	if (fScheduler != this) {
+		fReady = true;
+		return B_OK;
+	}
 
 	status = _Forcewake(true);
 	if (status != B_OK) {
@@ -328,6 +424,9 @@ RenderEngine::Init(addr_t registers, GlobalGTT& gtt,
 		(uint32)fStatusPage.GraphicsAddress());
 	(void)_Read(fEngine->base + kRingHardwareStatusPage);
 
+	_ReadTopology();
+	_RequestMaximumFrequency();
+
 	_Forcewake(false);
 
 	fReady = true;
@@ -336,11 +435,42 @@ RenderEngine::Init(addr_t registers, GlobalGTT& gtt,
 
 
 status_t
+RenderEngine::InitClient(GlobalGTT& gtt, RenderEngine& scheduler,
+	PageTables* addressSpace)
+{
+	return Init(scheduler.fRegisters, gtt, *scheduler.fEngine,
+		scheduler.fScheduler, addressSpace, scheduler.fDevice,
+		scheduler.fRevision);
+}
+
+status_t
+RenderEngine::_WaitContextSaved(bigtime_t timeout)
+{
+	bigtime_t deadline = system_time() + timeout;
+	uint32 id = (uint32)(fContext.GraphicsAddress() >> 12);
+	const volatile uint32* csb = (const volatile uint32*)fStatusPage.Address()
+		+ kStatusBufferIndex;
+	do {
+		FlushCpuCache(fStatusPage.Address(), B_PAGE_SIZE);
+		for (uint32 i = 0; i < 6; i++) {
+			// Gen8-10 CSB: ACTIVE_IDLE plus COMPLETE means the context's
+			// image has been saved, not just that its fence command ran.
+			if ((csb[2 * i] & ((1 << 3) | (1 << 4)))
+					== ((1 << 3) | (1 << 4)) && csb[2 * i + 1] == id)
+				return B_OK;
+		}
+		snooze(50);
+	} while (system_time() < deadline);
+	return B_TIMED_OUT;
+}
+
+
+status_t
 RenderEngine::MapBuffer(area_id area, uint64 address)
 {
 	if (!fReady)
 		return B_NO_INIT;
-	return fPageTables.Map(area, address);
+	return fAddressSpace->Map(area, address);
 }
 
 
@@ -358,7 +488,7 @@ RenderEngine::MapGlobalRange(GlobalGTT& gtt, uint64 address, uint64 size)
 		status_t status = gtt.Lookup(page, physical);
 		if (status != B_OK)
 			return status;
-		status = fPageTables.MapPhysical(page, physical, B_PAGE_SIZE);
+		status = fAddressSpace->MapPhysical(page, physical, B_PAGE_SIZE);
 		if (status != B_OK)
 			return status;
 	}
@@ -371,7 +501,7 @@ RenderEngine::UnmapBuffer(uint64 address, uint64 size)
 {
 	if (!fReady)
 		return B_NO_INIT;
-	return fPageTables.Unmap(address, size);
+	return fAddressSpace->Unmap(address, size);
 }
 
 
@@ -403,7 +533,7 @@ RenderEngine::_WaitSeqno(uint32 seqno, bigtime_t timeout)
 	bigtime_t spinUntil = start + kSpinTimeout;
 
 	while (true) {
-		if ((int32)(_Seqno() - seqno) >= 0)
+		if (_Seqno() >= seqno)
 			return B_OK;
 
 		bigtime_t now = system_time();
@@ -423,7 +553,7 @@ RenderEngine::_UpdateTail(uint32 tail)
 	fRegisterState[kStateRingTail] = tail;
 	// The context image has to be in memory before the engine is pointed at
 	// it, and it is read by the GPU, not by this processor.
-	FlushRange(fRegisterState, B_PAGE_SIZE);
+	FlushCpuCache(fRegisterState, B_PAGE_SIZE);
 	memory_write_barrier();
 
 	// Keep a copy to compare against once the engine has saved the context
@@ -440,7 +570,13 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	if (batchLength == 0 || (batchAddress & 0x3) != 0)
 		return B_BAD_VALUE;
 
-	MutexLocker locker(&fLock);
+	MutexLocker locker(&fScheduler->fLock);
+
+	if (fScheduler->fFaulted || fFaulted)
+		return B_DEV_NOT_READY;
+	// Do not wrap a 32-bit hardware timeline; create a new context instead.
+	if (fNextSeqno >= 0x7fffffff)
+		return B_NO_MEMORY;
 
 	// One submission at a time: the ring is only refilled once the engine has
 	// finished with what was in it.
@@ -450,9 +586,22 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 			return status;
 	}
 
+	status_t status = _Forcewake(true);
+	if (status != B_OK) {
+		_Forcewake(false);
+		return status;
+	}
+	// Fetch the context image the GPU saved before changing its tail.
+	FlushCpuCache(fContext.Address(), fContext.Size());
+	if (fNextSeqno > 1)
+		fRegisterState[kStateContextControl]
+			= Masked(kContextControlRestoreInhibit, false)
+				| Masked(kContextControlInhibitSyn, true)
+				| Masked((1 << 1) | (1 << 2), false);
+
 	// The batch, then whatever this engine needs to make its work visible
 	// and say so. Room for the longest of the two shapes below.
-	const uint32 kCommandDwords = 16;
+	const uint32 kCommandDwords = fEngine->usesPipeControl ? 64 : 32;
 	if (fRingTail + kCommandDwords * 4 > fRingSize) {
 		// Pad the rest of the ring so the engine runs into the wrap cleanly.
 		uint32* pad = (uint32*)((uint8*)fRing.Address() + fRingTail);
@@ -461,6 +610,7 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		fRingTail = 0;
 	}
 
+	fAddressSpace->Flush();
 	uint32 seqno = fNextSeqno++;
 	uint32* ring = (uint32*)((uint8*)fRing.Address() + fRingTail);
 	uint32 fenceAddress = (uint32)fFencePage.GraphicsAddress() + kFenceOffset;
@@ -469,6 +619,21 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	// the flush is what makes everything the batch wrote visible before the
 	// fence says it is.
 	uint32 at = 0;
+	if (fEngine->usesPipeControl) {
+		_AppendRenderWorkarounds(ring, at);
+		// Gen9 requires a null PIPE_CONTROL before VF invalidation. This
+		// also invalidates translations before reusing a virtual address.
+		ring[at++] = kPipeControl(6);
+		for (uint32 i = 0; i < 5; i++) ring[at++] = 0;
+		ring[at++] = kPipeControl(6);
+		ring[at++] = kPipeControlStall | kPipeControlTlbInvalidate
+			| kPipeControlQwordWrite | kPipeControlGlobalGtt
+			| (1 << 11) | (1 << 10) | (1 << 4) | (1 << 3) | (1 << 2);
+		ring[at++] = fenceAddress + 8; // scratch, never the completion slot
+		ring[at++] = 0;
+		ring[at++] = 0;
+		ring[at++] = 0;
+	}
 	ring[at++] = kMiBatchBufferStart | kMiBatchBufferPerProcess;
 	ring[at++] = (uint32)batchAddress;
 	ring[at++] = (uint32)(batchAddress >> 32);
@@ -502,8 +667,8 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	while (at < kCommandDwords)
 		ring[at++] = kMiNoop;
 
-	fRingTail += kCommandDwords * 4;
-	FlushRange(ring, kCommandDwords * 4);
+	fRingTail = (fRingTail + kCommandDwords * 4) % fRingSize;
+	FlushCpuCache(fRing.Address(), fRing.Size());
 	_UpdateTail(fRingTail);
 
 	// The descriptor names the context image and how it is addressed; the
@@ -511,11 +676,16 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	uint64 descriptor = fContext.GraphicsAddress()
 		| (kContextLegacy64Bit << kContextAddressingShift)
 		| kContextValid | kContextPrivilege | kContextForceRestore
-		| (kContextId << kContextIdShift);
+		| ((fContext.GraphicsAddress() >> 12) << kContextIdShift);
 
-	status_t status = _Forcewake(true);
-	if (status != B_OK)
-		return status;
+
+	// Each logical context owns its status buffer. All submissions share the
+	// physical engine lock, including the complete context-save interval.
+	memset(fStatusPage.Address(), 0, fStatusPage.Size());
+	FlushCpuCache(fStatusPage.Address(), fStatusPage.Size());
+	_Write(fEngine->base + kRingHardwareStatusPage,
+		(uint32)fStatusPage.GraphicsAddress());
+	(void)_Read(fEngine->base + kRingHardwareStatusPage);
 
 	// An empty second port, then ours: the hardware reads both.
 	_Write(fEngine->base + kRingExeclistSubmitPort, 0);
@@ -523,10 +693,111 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)(descriptor >> 32));
 	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)descriptor);
 
+	status = _WaitSeqno(seqno, kIdleTimeout);
+	if (status == B_OK)
+		status = _WaitContextSaved(kIdleTimeout);
+	if (status == B_OK) {
+		// The engine has saved its image, so the timestamp inside it is the
+		// one it stopped at. The difference since the last submission is the
+		// time the hardware spent running this context and nothing else.
+		FlushCpuCache(fContext.Address(), fContext.Size());
+		uint32 timestamp = fRegisterState[kStateTimestamp];
+		uint32 elapsed = timestamp - fLastTimestamp;
+		fLastTimestamp = timestamp;
+		fGpuTicks += elapsed;
+		fScheduler->fTotalGpuTicks += elapsed;
+	}
 	_Forcewake(false);
+	if (status != B_OK) {
+		fFaulted = true;
+		fScheduler->fFaulted = true;
+		return status;
+	}
 
 	_fence = seqno;
 	return B_OK;
+}
+
+
+// Not every register answers in the domain belonging to the engine reading it.
+// The fuses and the frequency request both live in the domain Linux calls GT,
+// which is the one the blitter uses, so an engine that is not the blitter has
+// to take it as well. Only used while the device is being brought up, where
+// nothing else is holding a domain.
+status_t
+RenderEngine::_ForcewakeGt(bool take)
+{
+	if (fEngine->forcewake == kForcewakeBlitter)
+		return B_OK;
+
+	_Write(kForcewakeBlitter, Masked(kForcewakeKernel, take));
+	bigtime_t deadline = system_time() + kForcewakeTimeout;
+	while (system_time() < deadline) {
+		bool awake = (_Read(kForcewakeBlitterAck) & kForcewakeKernel) != 0;
+		if (awake == take)
+			return B_OK;
+		spin(10);
+	}
+	return B_TIMED_OUT;
+}
+
+
+// Ask for the fastest frequency the part reports it can reach. There is no
+// governor here and no power management interrupts to drive one, so this does
+// not track load; what it does is stop the GPU asking for less than its own
+// minimum, which is the state firmware leaves it in. Idle power is unaffected,
+// because the GPU still powers itself down between submissions and a frequency
+// only applies while it is running.
+void
+RenderEngine::_RequestMaximumFrequency()
+{
+	if (_ForcewakeGt(true) != B_OK) {
+		_ForcewakeGt(false);
+		return;
+	}
+	uint32 cap = _Read(kFrequencyCap);
+	uint32 maximum = (cap & 0xff) * kFrequencyScaler;
+	if (maximum != 0)
+		_Write(kFrequencyRequest, maximum << kFrequencyRequestShift);
+	_ForcewakeGt(false);
+}
+
+
+// Must be called with this engine's forcewake domain held: the fuse registers
+// live in it and read back as zero without it. The layout is the generation 9
+// one Linux decodes in gen9_sseu_info_init: three slices of four subslices of
+// eight execution units, a slice enable field, a subslice disable field, and
+// one execution unit disable register per slice.
+void
+RenderEngine::_ReadTopology()
+{
+	if (_ForcewakeGt(true) != B_OK) {
+		_ForcewakeGt(false);
+		return;
+	}
+	fTopology = Request<Topology>();
+	fTopology.maxSlices = 3;
+	fTopology.maxSubslices = 4;
+	fTopology.maxEusPerSubslice = 8;
+
+	uint32 fuse = _Read(kFuse2);
+	fTopology.sliceMask = (fuse >> kFuse2SliceEnableShift) & 0x7;
+	uint32 subslices = (~(fuse >> kFuse2SubsliceDisableShift)) & 0xf;
+
+	for (uint32 slice = 0; slice < 3; slice++) {
+		if ((fTopology.sliceMask & (1 << slice)) == 0)
+			continue;
+		fTopology.subsliceMask[slice] = subslices;
+		uint32 disable = _Read(kEuDisable(slice));
+		uint32 mask = 0;
+		for (uint32 subslice = 0; subslice < 4; subslice++) {
+			if ((subslices & (1 << subslice)) == 0)
+				continue;
+			mask |= (~(disable >> (subslice * 8)) & 0xff) << (subslice * 8);
+		}
+		fTopology.euMask[slice] = mask;
+	}
+	_ForcewakeGt(false);
 }
 
 
@@ -536,7 +807,7 @@ RenderEngine::Status(EngineStatus& status)
 	if (!fReady)
 		return B_NO_INIT;
 
-	MutexLocker locker(&fLock);
+	MutexLocker locker(&fScheduler->fLock);
 	status_t forcewake = _Forcewake(true);
 	if (forcewake != B_OK)
 		return forcewake;
@@ -560,7 +831,7 @@ RenderEngine::Status(EngineStatus& status)
 
 	// Read the image back from memory rather than from any copy of it this
 	// processor may still be holding.
-	FlushRange(fRegisterState, B_PAGE_SIZE);
+	FlushCpuCache(fRegisterState, B_PAGE_SIZE);
 	status.contextRingHead = fRegisterState[kStateRingHead];
 	status.contextRingTail = fRegisterState[kStateRingTail];
 	status.contextRingStart = fRegisterState[kStateRingStart];
@@ -593,7 +864,8 @@ RenderEngine::Wait(uint64 fence, bigtime_t timeout)
 {
 	if (!fReady)
 		return B_NO_INIT;
-	if (fence == 0 || fence > 0xffffffffULL)
+	if (fence == 0 || fence >= fNextSeqno || timeout < 0
+		|| timeout > 10000000)
 		return B_BAD_VALUE;
 	return _WaitSeqno((uint32)fence, timeout);
 }

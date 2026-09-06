@@ -158,6 +158,8 @@ def configure(build, stage, package, settings):
         'intel_gfx.accelerant': 'system non-packaged add-ons accelerants',
         'intel_gfx_ctl': 'system non-packaged bin',
         'intel_gfx_activate': 'system non-packaged bin',
+        'intel_gfx_cube': 'system non-packaged bin',
+        'Intel Gallium': 'home config non-packaged add-ons opengl',
         'IntelGfx': 'system non-packaged servers',
     }
     block = [BEGIN]
@@ -218,13 +220,15 @@ def main():
             objects / 'display/intel_gfx.accelerant': 'intel_gfx.accelerant',
             objects / 'server/IntelGfx': 'IntelGfx',
             objects / 'tools/intel_gfx_ctl': 'intel_gfx_ctl',
+            objects / 'demo/intel_gfx_cube': 'intel_gfx_cube',
+            project / 'out/mesa/Intel Gallium': 'Intel Gallium',
             project / 'package/intel_gfx_activate': 'intel_gfx_activate',
         }
         for source, name in staged.items():
             target = stage / name
             shutil.copy2(source, target)
             target.chmod(0o755)
-        package = project / 'out/intel_gfx-0.1.0-1-x86_64.hpkg'
+        package = project / 'out/intel_gfx-0.2.0-1-x86_64.hpkg'
 
         settings = stage_settings(stage, 'user', args.password,
                                   build / 'vm-ssh/id_ed25519.pub')

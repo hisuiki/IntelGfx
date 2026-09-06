@@ -21,6 +21,7 @@ public:
 	~PageTables();
 
 	status_t Init();
+	void Flush();
 	bool IsValid() const { return fRoot != 0; }
 
 	// Physical address of the top level table, which is what the context

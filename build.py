@@ -16,6 +16,8 @@ def main():
                         default=project.parent / 'generated.x86_64')
     parser.add_argument('-j', '--jobs', type=int, default=4)
     parser.add_argument('--package', action='store_true')
+    parser.add_argument('--mesa', action='store_true',
+                        help='also build the Mesa Iris OpenGL renderer')
     parser.add_argument('--tests', action='store_true', help='also build kernel memory test fixture')
     args = parser.parse_args()
     build = args.haiku_build.resolve()
@@ -34,7 +36,8 @@ def main():
                        'SubInclude HAIKU_TOP intel_gfx ;\n')
     command = ['jam', f'-sJAMFILE={wrapper}', '-sHAIKU_IGNORE_USER_BUILD_CONFIG=1',
                f'-j{args.jobs}', 'intel_gfx', 'intel_gfx.accelerant',
-               'IntelGfx', 'intel_gfx_ctl', 'intel_gfx_brightness_keys', 'intel_gfx_cube']
+               'IntelGfx', 'intel_gfx_ctl', 'intel_gfx_brightness_keys', 'intel_gfx_cube',
+               'intel_gfx_monitor']
     if args.tests:
         command.append('intel_gfx_memory_test')
     print('Building IntelGfx (log: %s)' % (out / 'build.log'), flush=True)
@@ -48,6 +51,12 @@ def main():
     if result.returncode:
         print('\n'.join((out / 'build.log').read_text().splitlines()[-100:]), file=sys.stderr)
         return result.returncode
+    mesa_renderer = project / 'out/mesa/Intel Gallium'
+    if args.mesa or args.package:
+        subprocess.run([
+            sys.executable, project / 'mesa/build.py',
+            '--haiku-build', build, f'-j{args.jobs}'
+        ], check=True)
     if not args.package:
         print('Build complete. Add --package to produce an HPKG.')
         return 0
@@ -63,10 +72,12 @@ def main():
         objects / 'input/intel_gfx_brightness_keys':
             'add-ons/input_server/filters/intel_gfx_brightness_keys',
         objects / 'demo/intel_gfx_cube': 'bin/intel_gfx_cube',
+        objects / 'monitor/intel_gfx_monitor': 'bin/intel_gfx_monitor',
         project / 'package/intel_gfx_activate': 'bin/intel_gfx_activate',
         project / 'README.md': 'documentation/packages/intel_gfx/README.md',
         project / 'UPSTREAM.json': 'documentation/packages/intel_gfx/UPSTREAM.json',
         project / 'License.md': 'data/licenses/IntelGfx',
+        mesa_renderer: 'data/intel_gfx/opengl/Intel Gallium',
     }
     for source, destination in files.items():
         target = stage / destination
@@ -80,7 +91,7 @@ def main():
         parser.error('package tool not built; build the Haiku package tool first')
     env = dict(environment)
     env['LD_LIBRARY_PATH'] = str(build / 'objects/linux/lib') + ':' + env.get('LD_LIBRARY_PATH', '')
-    hpkg = out / 'intel_gfx-0.1.0-1-x86_64.hpkg'
+    hpkg = out / 'intel_gfx-0.2.0-1-x86_64.hpkg'
     subprocess.run([str(package), 'create', '-C', str(stage), str(hpkg)],
                    check=True, env=env)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
@@ -88,6 +99,7 @@ def main():
     (out / 'build-manifest.json').write_text(json.dumps({
         'haiku_revision': revision, 'build_directory': str(build),
         'package': str(hpkg), 'targets': command[5:],
+        'mesa_renderer': str(mesa_renderer),
     }, indent=2) + '\n')
     print(hpkg)
     return 0

@@ -4,6 +4,8 @@
 
 #include "IntelGfxABI.h"
 #include <OS.h>
+#include <errno.h>
+#include <unistd.h>
 
 namespace IntelGfx {
 
@@ -23,8 +25,23 @@ public:
 	status_t Submit(uint32 handle, uint64 offset, uint64 length,
 		uint64& fence, uint32 flags = 0) const;
 	status_t Wait(uint64 fence, bigtime_t timeout) const;
+	status_t CreateRenderContext(uint32& context) const;
+	status_t DestroyRenderContext(uint32 context) const;
+	status_t BindVirtual(uint32 handle, uint64 address) const;
+	status_t UnbindVirtual(uint32 handle) const;
+	status_t SubmitObjects(uint32 context, uint32 batchHandle, uint64 offset,
+		uint64 length, const uint32* handles, uint32 count, uint64& fence) const;
+	status_t WaitRender(uint64 fence, bigtime_t timeout) const;
+	status_t Cache(uint32 handle, uint64 offset, uint64 length) const;
 	status_t Status(EngineStatus& status, uint32 flags = 0) const;
 	status_t Read(uint32 offset, uint32& value) const;
+	// For request structures that need no per-field handling of their own.
+	template<typename T> status_t Ioctl(uint32 operation, T* request) const
+	{
+		if (ioctl(fFD, operation, request, sizeof(T)) < 0)
+			return errno;
+		return B_OK;
+	}
 	status_t GetFramebuffer(Framebuffer& framebuffer) const;
 	status_t GetDisplayStatus(DisplayStatus& status) const;
 	int FD() const { return fFD; }
