@@ -1,0 +1,13 @@
+SubDir HAIKU_TOP intel_gfx tests ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx kernel ] ;
+UsePrivateHeaders graphics ;
+UsePrivateKernelHeaders ;
+KernelAddon intel_gfx_memory_test :
+	memory_driver.cpp RenderClient.cpp BufferObject.cpp
+	GlobalGTT.cpp PageTables.cpp RenderEngine.cpp kernel_cpp.cpp ;
+SEARCH on [ FGristFiles RenderClient.cpp BufferObject.cpp GlobalGTT.cpp
+		PageTables.cpp RenderEngine.cpp ]
+	= [ FDirName $(HAIKU_TOP) intel_gfx kernel ] ;
+SEARCH on [ FGristFiles kernel_cpp.cpp ]
+	= [ FDirName $(HAIKU_TOP) src system kernel util ] ;

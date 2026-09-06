@@ -1,0 +1,20 @@
+name intel_gfx
+version 0.1.0-1
+architecture x86_64
+summary "Experimental modular Intel graphics driver and device service"
+description "IntelGfx display driver, versioned buffer interface, device service and diagnostics. GPU rendering is under development. Driver activation is explicit."
+packager "IntelGfx contributors"
+vendor "IntelGfx contributors"
+copyrights {
+	"2006-2026 Haiku, Inc. and contributors"
+	"2026 IntelGfx contributors"
+}
+licenses { "IntelGfx" }
+provides {
+	intel_gfx = 0.1.0
+	cmd:intel_gfx_ctl = 0.1.0
+	cmd:intel_gfx_activate = 0.1.0
+}
+requires {
+	haiku
+}

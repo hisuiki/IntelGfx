@@ -1,0 +1,58 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Select the experimental binary under the SAME legacy-driver name so only
+# one driver owns the Intel PCI function. Loaded drivers change after reboot.
+set -eu
+
+# The home directory, not the system one: the kernel ranks a driver by the
+# directory its path starts with and tests the system directory before the
+# system's non-packaged directory, which that path also starts with. A driver
+# under the system's non-packaged directory therefore ties with the packaged
+# driver of the same name and loses to it, while one under the home directory
+# is ranked on its own and is scanned first.
+base=$(finddir B_USER_NONPACKAGED_ADDONS_DIRECTORY)/kernel/drivers
+binary=$base/bin/intel_extreme
+device=$base/dev/graphics/intel_extreme
+target=/boot/system/data/intel_gfx/kernel/intel_gfx
+
+owned_link()
+{
+	[ -L "$1" ] && [ "$(readlink "$1")" = "$2" ]
+}
+
+case "${1:-status}" in
+	status)
+		if owned_link "$binary" "$target"; then
+			echo "IntelGfx selected for next boot."
+		else
+			echo "IntelGfx is not selected by this tool."
+		fi
+		echo "Use intel_gfx_ctl list to inspect the currently loaded driver."
+		;;
+	enable)
+		[ -f "$target" ] || { echo "Install the IntelGfx HPKG first." >&2; exit 1; }
+		for path in "$binary" "$device"; do
+			if [ -e "$path" ] || [ -L "$path" ]; then
+				if [ "$path" = "$binary" ]; then expected=$target; else expected=../../bin/intel_extreme; fi
+				owned_link "$path" "$expected" || {
+					echo "Refusing to replace existing override: $path" >&2; exit 1;
+				}
+			fi
+		done
+		mkdir -p "$base/bin" "$base/dev/graphics"
+		owned_link "$binary" "$target" || ln -s "$target" "$binary"
+		owned_link "$device" ../../bin/intel_extreme || ln -s ../../bin/intel_extreme "$device"
+		echo "IntelGfx selected. Reboot to load the kernel driver and accelerant."
+		;;
+	disable)
+		if owned_link "$device" ../../bin/intel_extreme && owned_link "$binary" "$target"; then
+			rm "$device"
+		fi
+		if owned_link "$binary" "$target"; then rm "$binary"; fi
+		echo "IntelGfx override removed. Reboot to restore the packaged Intel driver."
+		;;
+	*)
+		echo "Usage: intel_gfx_activate [status|enable|disable]" >&2
+		exit 2
+		;;
+esac

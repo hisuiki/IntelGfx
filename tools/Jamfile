@@ -1,0 +1,8 @@
+SubDir HAIKU_TOP intel_gfx tools ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx client ] ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx server ] ;
+Application intel_gfx_ctl : intel_gfx_ctl.cpp Device.cpp DeviceRoster.cpp
+	: be $(TARGET_LIBSTDC++) ;
+SEARCH on [ FGristFiles Device.cpp ] = [ FDirName $(HAIKU_TOP) intel_gfx client ] ;
+SEARCH on [ FGristFiles DeviceRoster.cpp ] = [ FDirName $(HAIKU_TOP) intel_gfx server ] ;

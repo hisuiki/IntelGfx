@@ -1,0 +1,11 @@
+SubDir HAIKU_TOP intel_gfx display ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
+UsePrivateHeaders graphics ;
+UsePrivateHeaders [ FDirName graphics common ] ;
+UsePrivateHeaders shared ;
+Addon intel_gfx.accelerant :
+	accelerant.cpp cursor.cpp dpms.cpp engine.cpp hooks.cpp memory.cpp
+	mode.cpp overlay.cpp pll.cpp FlexibleDisplayInterface.cpp
+	PanelFitter.cpp Ports.cpp Pipes.cpp TigerLakePLL.cpp
+	: be $(TARGET_LIBSTDC++) libaccelerantscommon.a
+;

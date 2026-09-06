@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP intel_gfx kernel ;
+SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
+UsePrivateHeaders graphics ;
+UsePrivateHeaders [ FDirName graphics vesa ] ;
+UsePrivateHeaders [ FDirName graphics common ] ;
+UsePrivateKernelHeaders ;
+KernelAddon intel_gfx :
+	bios.cpp driver.cpp device.cpp intel_extreme.cpp power.cpp
+	RenderClient.cpp BufferObject.cpp GlobalGTT.cpp PageTables.cpp
+	RenderEngine.cpp kernel_cpp.cpp
+	: libgraphicscommon.a
+;
+SEARCH on [ FGristFiles kernel_cpp.cpp ]
+	= [ FDirName $(HAIKU_TOP) src system kernel util ] ;
