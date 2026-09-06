@@ -76,7 +76,7 @@ service x-vnd.haiku-sshd {
 """
 
 
-def stage_settings(stage, user, password, key_file):
+def stage_settings(stage, user, password, key_file=None, debug=False):
     """Writes the image's settings files and returns them as name, directory
     pairs."""
     files = []
@@ -84,8 +84,9 @@ def stage_settings(stage, user, password, key_file):
     (stage / 'shadow').write_text(shadow_line(user, password))
     files.append(('shadow', 'system settings etc'))
 
-    (stage / 'kernel').write_text(KERNEL_SETTINGS)
-    files.append(('kernel', 'system settings kernel drivers'))
+    if debug:
+        (stage / 'kernel').write_text(KERNEL_SETTINGS)
+        files.append(('kernel', 'system settings kernel drivers'))
 
     (stage / 'sshd_config').write_text(SSHD_CONFIG)
     files.append(('sshd_config', 'system non-packaged data intel_gfx'))
@@ -194,6 +195,10 @@ def main():
                         help='use the image already in the build directory')
     parser.add_argument('--password', default='haiku',
                         help="password for the image's user, default haiku")
+    parser.add_argument('--debug', action='store_true',
+                        help='enable kernel serial and syslog debugging in the image')
+    parser.add_argument('--ssh-key', type=Path, default=None,
+                        help='authorized SSH public key file to include in the image')
     args = parser.parse_args()
 
     build = args.haiku_build.resolve()
@@ -231,7 +236,7 @@ def main():
         package = project / 'out/intel_gfx-0.2.0-1-x86_64.hpkg'
 
         settings = stage_settings(stage, 'user', args.password,
-                                  build / 'vm-ssh/id_ed25519.pub')
+                                  key_file=args.ssh_key, debug=args.debug)
 
         config = configure(build, stage, package, settings)
         print(f'Configured {config}; building the image', flush=True)
