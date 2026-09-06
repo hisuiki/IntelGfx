@@ -30,6 +30,7 @@ static const uint32 kFenceOffset = 0x100;		// eight byte aligned, bit 5 clear
 static const uint64 kContextId = 0x20;
 static const bigtime_t kForcewakeTimeout = 50000;
 static const bigtime_t kIdleTimeout = 1000000;
+static const bigtime_t kSpinTimeout = 2000;
 
 // Index of the values this driver fills in, in dwords into the register
 // image. They follow from the layout below and match i915's names for them.
@@ -296,6 +297,28 @@ RenderEngine::MapBuffer(area_id area, uint64 address)
 
 
 status_t
+RenderEngine::MapGlobalRange(GlobalGTT& gtt, uint64 address, uint64 size)
+{
+	if (!fReady)
+		return B_NO_INIT;
+
+	uint64 first = address & ~((uint64)B_PAGE_SIZE - 1);
+	uint64 last = (address + size + B_PAGE_SIZE - 1)
+		& ~((uint64)B_PAGE_SIZE - 1);
+	for (uint64 page = first; page < last; page += B_PAGE_SIZE) {
+		phys_addr_t physical = 0;
+		status_t status = gtt.Lookup(page, physical);
+		if (status != B_OK)
+			return status;
+		status = fPageTables.MapPhysical(page, physical, B_PAGE_SIZE);
+		if (status != B_OK)
+			return status;
+	}
+	return B_OK;
+}
+
+
+status_t
 RenderEngine::UnmapBuffer(uint64 address, uint64 size)
 {
 	if (!fReady)
@@ -324,13 +347,24 @@ RenderEngine::CompletedFence()
 status_t
 RenderEngine::_WaitSeqno(uint32 seqno, bigtime_t timeout)
 {
-	bigtime_t deadline = system_time() + timeout;
+	// A few commands finish in microseconds, so spin for a short while before
+	// giving up the processor: sleeping first would make every submission
+	// cost far more than the work it carries.
+	bigtime_t start = system_time();
+	bigtime_t deadline = start + timeout;
+	bigtime_t spinUntil = start + kSpinTimeout;
+
 	while (true) {
 		if ((int32)(_Seqno() - seqno) >= 0)
 			return B_OK;
-		if (system_time() >= deadline)
+
+		bigtime_t now = system_time();
+		if (now >= deadline)
 			return B_TIMED_OUT;
-		snooze(200);
+		if (now < spinUntil)
+			spin(2);
+		else
+			snooze(200);
 	}
 }
 

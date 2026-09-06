@@ -366,6 +366,194 @@ static status_t Displays(Device& device)
 }
 
 
+// Fills a rectangle of the visible screen with the blitter, which is the
+// first thing this driver does that anyone can see happening.
+static status_t FillTest(Device& device)
+{
+	DeviceInfo info;
+	status_t status = device.GetInfo(info);
+	if (status != B_OK)
+		return status;
+	if ((info.capabilities & kRenderSubmission) == 0) {
+		fputs("This device reports no GPU submission.\n", stderr);
+		return B_NOT_SUPPORTED;
+	}
+
+	Framebuffer screen;
+	status = device.GetFramebuffer(screen);
+	if (status != B_OK)
+		return status;
+	printf("Framebuffer %" B_PRIu32 "x%" B_PRIu32 " at 0x%" B_PRIx64
+		", pitch %" B_PRIu32 ", %" B_PRIu32 " bits per pixel\n",
+		screen.width, screen.height, screen.address, screen.pitch,
+		screen.bitsPerPixel);
+	if (screen.bitsPerPixel != 32) {
+		fputs("This test only knows 32 bit colour.\n", stderr);
+		return B_NOT_SUPPORTED;
+	}
+
+	// A band across the middle of the screen, wide enough to be unmistakable
+	// and short enough to leave the desktop usable.
+	uint32 x = screen.width / 4;
+	uint32 y = screen.height / 3;
+	uint32 width = screen.width / 2;
+	uint32 height = screen.height / 6;
+	const uint32 kColour = 0x00d8402f;		// a red the desktop does not use
+
+	MappedBuffer batch(device);
+	status = batch.Init(B_PAGE_SIZE, true);
+	if (status != B_OK)
+		return status;
+
+	uint32* commands = (uint32*)batch.Address();
+	commands[0] = kXyColorBlit | kBlitWriteRgb | kBlitWriteAlpha;
+	commands[1] = kBlitDepth32 | kBlitRopColorCopy | screen.pitch;
+	commands[2] = (y << 16) | x;
+	commands[3] = ((y + height) << 16) | (x + width);
+	commands[4] = (uint32)screen.address;
+	commands[5] = (uint32)(screen.address >> 32);
+	commands[6] = kColour;
+	commands[7] = kMiBatchBufferEnd;
+
+	uint64 fence = 0;
+	status = device.Submit(batch.Handle(), 0, 8 * sizeof(uint32), fence);
+	if (status != B_OK)
+		return status;
+
+	status = device.Wait(fence, 2000000);
+	if (status != B_OK) {
+		fprintf(stderr, "The GPU did not signal the fence: %s\n",
+			strerror(status));
+		EngineStatus engine;
+		if (device.Status(engine) == B_OK) {
+			puts("Engine afterwards:");
+			PrintEngineStatus(engine);
+		}
+		return status;
+	}
+
+	// Read the result back with the GPU as well: copying a piece of the
+	// screen into memory this process can look at says whether the fill
+	// really landed, without anyone having to watch the display.
+	const uint32 kCheckWidth = 16;
+	const uint32 kCheckHeight = 4;
+	MappedBuffer readback(device);
+	status = readback.Init(B_PAGE_SIZE, true);
+	if (status != B_OK)
+		return status;
+
+	uint64 target = readback.GraphicsAddress();
+	commands[0] = kXySourceCopyBlit | kBlitWriteRgb | kBlitWriteAlpha;
+	commands[1] = kBlitDepth32 | kBlitRopSourceCopy | (kCheckWidth * 4);
+	commands[2] = 0;
+	commands[3] = (kCheckHeight << 16) | kCheckWidth;
+	commands[4] = (uint32)target;
+	commands[5] = (uint32)(target >> 32);
+	commands[6] = ((y + height / 2) << 16) | (x + width / 2);
+	commands[7] = screen.pitch;
+	commands[8] = (uint32)screen.address;
+	commands[9] = (uint32)(screen.address >> 32);
+	commands[10] = kMiBatchBufferEnd;
+
+	status = device.Submit(batch.Handle(), 0, 11 * sizeof(uint32), fence);
+	if (status != B_OK)
+		return status;
+	status = device.Wait(fence, 2000000);
+	if (status != B_OK) {
+		fprintf(stderr, "The copy back never completed: %s\n",
+			strerror(status));
+		return status;
+	}
+
+	const uint32* pixels = (const uint32*)readback.Address();
+	for (uint32 i = 0; i < kCheckWidth * kCheckHeight; i++) {
+		if ((pixels[i] & 0x00ffffff) != kColour) {
+			fprintf(stderr, "Pixel %" B_PRIu32 " reads %#" B_PRIx32
+				", expected %#" B_PRIx32 "\n", i, pixels[i], kColour);
+			return B_ERROR;
+		}
+	}
+
+	printf("PASS: the GPU filled %" B_PRIu32 "x%" B_PRIu32 " at %" B_PRIu32
+		",%" B_PRIu32 " on screen and read the same pixels back.\n",
+		width, height, x, y);
+	return B_OK;
+}
+
+
+// How long one submission takes from end to end, which decides whether the
+// accelerant should hand small operations to the GPU at all.
+static status_t Bench(Device& device)
+{
+	MappedBuffer batch(device);
+	status_t status = batch.Init(B_PAGE_SIZE, true);
+	if (status != B_OK)
+		return status;
+
+	uint32* commands = (uint32*)batch.Address();
+	commands[0] = kMiBatchBufferEnd;
+	commands[1] = kMiNoop;
+
+	const uint32 kRounds = 200;
+	bigtime_t start = system_time();
+	for (uint32 i = 0; i < kRounds; i++) {
+		uint64 fence = 0;
+		status = device.Submit(batch.Handle(), 0, 2 * sizeof(uint32), fence);
+		if (status != B_OK)
+			return status;
+		status = device.Wait(fence, 2000000);
+		if (status != B_OK)
+			return status;
+	}
+	bigtime_t elapsed = system_time() - start;
+
+	printf("%" B_PRIu32 " submissions in %" B_PRIdBIGTIME " us, %"
+		B_PRIdBIGTIME " us each\n", kRounds, elapsed, elapsed / kRounds);
+	return B_OK;
+}
+
+
+// Watches the display interrupt for a second, which is long enough to tell
+// sixty vertical blanks from none at all.
+static status_t Vblank(Device& device)
+{
+	DisplayStatus first;
+	status_t status = device.GetDisplayStatus(first);
+	if (status != B_OK)
+		return status;
+
+	printf("Master interrupt control: %#" B_PRIx32 " (%s)\n",
+		first.masterInterrupt,
+		(first.masterInterrupt & (1u << 31)) != 0 ? "enabled" : "disabled");
+	for (uint32 pipe = 0; pipe < 3; pipe++) {
+		printf("Pipe %c: interrupts enabled %#" B_PRIx32 ", masked %#" B_PRIx32
+			", frame %" B_PRIu32 "\n", 'A' + (char)pipe,
+			first.pipeInterruptEnable[pipe], first.pipeInterruptMask[pipe],
+			first.frameCount[pipe]);
+	}
+
+	snooze(1000000);
+
+	DisplayStatus second;
+	status = device.GetDisplayStatus(second);
+	if (status != B_OK)
+		return status;
+
+	printf("In one second: %" B_PRIu64 " vertical blanks", 
+		second.vblankCount - first.vblankCount);
+	for (uint32 pipe = 0; pipe < 3; pipe++) {
+		uint32 frames = second.frameCount[pipe] - first.frameCount[pipe];
+		if (frames != 0)
+			printf(", pipe %c drew %" B_PRIu32 " frames", 'A' + (char)pipe, frames);
+	}
+	printf("\n");
+
+	if (second.vblankCount == first.vblankCount)
+		puts("The display is not interrupting: nothing can wait for a frame.");
+	return B_OK;
+}
+
+
 int main(int argc, char** argv)
 {
 	status_t status = B_BAD_VALUE;
@@ -392,7 +580,10 @@ int main(int argc, char** argv)
 		|| strcmp(argv[1], "gtt-test") == 0
 		|| strcmp(argv[1], "submit-test") == 0
 		|| strcmp(argv[1], "engine-status") == 0
-		|| strcmp(argv[1], "displays") == 0)) {
+		|| strcmp(argv[1], "displays") == 0
+		|| strcmp(argv[1], "fill-test") == 0
+		|| strcmp(argv[1], "bench") == 0
+		|| strcmp(argv[1], "vblank") == 0)) {
 		Device device;
 		status = device.Open(argv[2]);
 		if (status == B_OK) {
@@ -404,6 +595,12 @@ int main(int argc, char** argv)
 				status = SubmitTest(device);
 			else if (strcmp(argv[1], "displays") == 0)
 				status = Displays(device);
+			else if (strcmp(argv[1], "fill-test") == 0)
+				status = FillTest(device);
+			else if (strcmp(argv[1], "bench") == 0)
+				status = Bench(device);
+			else if (strcmp(argv[1], "vblank") == 0)
+				status = Vblank(device);
 			else if (strcmp(argv[1], "engine-status") == 0) {
 				EngineStatus engine;
 				status = device.Status(engine);
@@ -421,7 +618,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "Usage: %s list | service-info | info DEVICE"
 			" | buffer-test DEVICE | gtt-test DEVICE"
 			" | submit-test DEVICE | engine-status DEVICE"
-			" | displays DEVICE\n", argv[0]);
+			" | displays DEVICE | fill-test DEVICE | vblank DEVICE\n",
+			argv[0]);
 		return 2;
 	}
 	if (status != B_OK)

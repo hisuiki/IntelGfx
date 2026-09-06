@@ -234,6 +234,34 @@ PageTables::Map(area_id area, uint64 address)
 
 
 status_t
+PageTables::MapPhysical(uint64 address, phys_addr_t physical, uint64 size)
+{
+	if (!IsValid())
+		return B_NO_INIT;
+	if ((address & kPageMask) != 0 || (physical & kPageMask) != 0)
+		return B_BAD_VALUE;
+
+	MutexLocker locker(&fLock);
+	for (uint64 offset = 0; offset < size; offset += B_PAGE_SIZE) {
+		if (((uint64)(physical + offset) & ~kPageEntryAddressMask) != 0)
+			return B_BAD_ADDRESS;
+
+		Table pageTable;
+		uint32 index;
+		status_t status = _Walk(address + offset, true, pageTable, index);
+		if (status != B_OK)
+			return status;
+
+		pageTable.entries[index] = (uint64)(physical + offset)
+			| kPageEntryPresent | kPageEntryWritable;
+	}
+
+	memory_write_barrier();
+	return B_OK;
+}
+
+
+status_t
 PageTables::Unmap(uint64 address, uint64 size)
 {
 	if (!IsValid())

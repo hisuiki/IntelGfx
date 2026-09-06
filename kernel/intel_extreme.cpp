@@ -72,6 +72,10 @@ read_settings(bool &hardwareCursor)
 static int32
 release_vblank_sem(intel_info &info)
 {
+	// Counted so that a diagnostic can tell a display that never interrupts
+	// from one that does, without owning the semaphore itself.
+	info.vblank_count++;
+
 	int32 count;
 	if (get_sem_count(info.shared_info->vblank_sem, &count) == B_OK
 		&& count < 0) {

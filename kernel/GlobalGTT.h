@@ -34,6 +34,10 @@ public:
 	uint64 Base() const { return fBase; }
 	uint64 Size() const { return fSize; }
 
+	// The physical page a global address currently resolves to, including
+	// addresses below the managed range, such as the display's framebuffer.
+	status_t Lookup(uint64 address, phys_addr_t& _physical) const;
+
 	status_t Bind(area_id area, uint64& _address);
 	status_t Unbind(uint64 address, uint64 size);
 
@@ -54,6 +58,7 @@ private:
 
 	addr_t fRegisters;
 	addr_t fEntries;
+	uint64 fEntryCount;
 	uint64 fFirstPage;
 	uint64 fPageCount;
 	uint64 fBase;

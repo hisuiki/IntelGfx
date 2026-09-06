@@ -104,6 +104,20 @@ status_t Device::Read(uint32 offset, uint32& value) const
 	return B_OK;
 }
 
+status_t Device::GetFramebuffer(Framebuffer& framebuffer) const
+{
+	framebuffer = Request<Framebuffer>();
+	return ioctl(fFD, kFramebuffer, &framebuffer, sizeof(framebuffer)) < 0
+		? errno : B_OK;
+}
+
+status_t Device::GetDisplayStatus(DisplayStatus& status) const
+{
+	status = Request<DisplayStatus>();
+	return ioctl(fFD, kDisplayStatus, &status, sizeof(status)) < 0
+		? errno : B_OK;
+}
+
 MappedBuffer::MappedBuffer(Device& device)
 	: fDevice(device), fHandle(0), fArea(-1), fAddress(NULL), fSize(0),
 	fGraphicsAddress(0), fBound(false) {}

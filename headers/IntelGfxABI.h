@@ -25,6 +25,8 @@ enum Operation {
 	kWaitFence,
 	kEngineStatus,
 	kReadRegister,
+	kFramebuffer,
+	kDisplayStatus,
 	// Keep last: the driver routes everything below this to the new
 	// interface, so adding an operation above needs no change there.
 	kOperationsEnd
@@ -153,6 +155,31 @@ struct ReadRegister {
 	uint32_t value;
 };
 
+// The framebuffer the display is scanning out, as the GPU addresses it. It
+// lives in the part of the address space the display driver allocates, below
+// everything this interface hands out, but it is addressable all the same.
+struct Framebuffer {
+	Header header;
+	uint64_t address;
+	uint32_t pitch;
+	uint32_t width;
+	uint32_t height;
+	uint32_t bitsPerPixel;
+};
+
+// Whether the display is interrupting, and whether anything asked it to.
+// A frame count that moves while the vertical blank count stands still means
+// the display is scanning out but its interrupt never arrives.
+struct DisplayStatus {
+	Header header;
+	uint64_t vblankCount;
+	uint32_t masterInterrupt;
+	uint32_t pipeInterruptEnable[3];
+	uint32_t pipeInterruptMask[3];
+	uint32_t frameCount[3];
+	uint32_t reserved[2];
+};
+
 template<typename T> inline T Request()
 {
 	T request = {};
@@ -170,6 +197,8 @@ static_assert(sizeof(SubmitBatch) == 40, "SubmitBatch ABI");
 static_assert(sizeof(WaitFence) == 24, "WaitFence ABI");
 static_assert(sizeof(EngineStatus) == 152, "EngineStatus ABI");
 static_assert(sizeof(ReadRegister) == 16, "ReadRegister ABI");
+static_assert(sizeof(Framebuffer) == 32, "Framebuffer ABI");
+static_assert(sizeof(DisplayStatus) == 64, "DisplayStatus ABI");
 
 } // namespace IntelGfx
 #endif

@@ -111,6 +111,21 @@ static_assert(kMiBatchBufferEnd == 0x05000000, "MI_BATCH_BUFFER_END");
 static_assert(kMiFlushDword == 0x13000002, "MI_FLUSH_DW");
 static_assert(kMiLoadRegisterImmediate == 0x11000000, "MI_LOAD_REGISTER_IMM");
 
+// Blitter commands. The colour fill takes seven dwords from generation 8,
+// where the destination address grew to two of them, and the copy ten.
+static constexpr uint32 kBlitInstruction(uint32 opcode)
+{
+	return (2 << 29) | (opcode << 22);
+}
+
+static constexpr uint32 kXyColorBlit = kBlitInstruction(0x50) | (7 - 2);
+static constexpr uint32 kXySourceCopyBlit = kBlitInstruction(0x53) | (10 - 2);
+static constexpr uint32 kBlitWriteRgb = 1 << 20;
+static constexpr uint32 kBlitWriteAlpha = 2 << 20;
+static constexpr uint32 kBlitDepth32 = 3 << 24;
+static constexpr uint32 kBlitRopColorCopy = 0xf0 << 16;
+static constexpr uint32 kBlitRopSourceCopy = 0xcc << 16;
+
 // Page table entries of the per-process page tables. Cacheability is chosen
 // by an index into the PAT registers, formed from three scattered bits; index
 // zero is the write-back entry the firmware and every other driver assume.

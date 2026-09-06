@@ -37,6 +37,9 @@ public:
 	// address their global mapping uses, so one address means the same thing
 	// to commands whichever address space they run against.
 	status_t MapBuffer(area_id area, uint64 address);
+	// Makes a range that only the global page table describes, such as the
+	// framebuffer, reachable at the same address from a batch.
+	status_t MapGlobalRange(GlobalGTT& gtt, uint64 address, uint64 size);
 	status_t UnmapBuffer(uint64 address, uint64 size);
 
 	status_t Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence);

@@ -47,6 +47,9 @@ struct intel_info {
 
 	enum pch_info	pch_info;
 
+	// Vertical blanks seen since the driver was loaded.
+	uint64			vblank_count;
+
 	// The device's GPU address space and command engine, shared by every
 	// client of it.
 	IntelGfx::GlobalGTT* gtt;

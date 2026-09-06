@@ -28,6 +28,7 @@ GlobalGTT::GlobalGTT()
 	:
 	fRegisters(0),
 	fEntries(0),
+	fEntryCount(0),
 	fFirstPage(0),
 	fPageCount(0),
 	fBase(0),
@@ -72,7 +73,8 @@ GlobalGTT::Init(addr_t registers, uint64 barSize, uint32 generation,
 
 	// The page table occupies the upper half of the register BAR.
 	addr_t entries = registers + (addr_t)(barSize / 2);
-	uint64 addressSpace = (tableSize / sizeof(uint64)) * B_PAGE_SIZE;
+	uint64 entryCount = tableSize / sizeof(uint64);
+	uint64 addressSpace = entryCount * B_PAGE_SIZE;
 
 	reserved = (reserved + kPageMask) & ~kPageMask;
 	if (reserved >= addressSpace)
@@ -110,6 +112,7 @@ GlobalGTT::Init(addr_t registers, uint64 barSize, uint32 generation,
 
 	fRegisters = registers;
 	fEntries = entries;
+	fEntryCount = entryCount;
 	fFirstPage = reserved / B_PAGE_SIZE;
 	fPageCount = pages;
 	fBase = reserved;
@@ -122,6 +125,28 @@ GlobalGTT::Init(addr_t registers, uint64 barSize, uint32 generation,
 	// never bound here.
 	_Fill(0, fPageCount, _ScratchEntry());
 	_Flush();
+	return B_OK;
+}
+
+
+status_t
+GlobalGTT::Lookup(uint64 address, phys_addr_t& _physical) const
+{
+	if (!IsValid())
+		return B_NOT_SUPPORTED;
+	if ((address & kPageMask) != 0)
+		return B_BAD_VALUE;
+
+	uint64 page = address / B_PAGE_SIZE;
+	if (page >= fEntryCount)
+		return B_BAD_VALUE;
+
+	uint64 entry = *(volatile uint64*)(fEntries
+		+ (addr_t)(page * sizeof(uint64)));
+	if ((entry & kEntryPresent) == 0)
+		return B_ENTRY_NOT_FOUND;
+
+	_physical = (phys_addr_t)(entry & kEntryAddressMask);
 	return B_OK;
 }
 

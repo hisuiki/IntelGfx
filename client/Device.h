@@ -25,6 +25,8 @@ public:
 	status_t Wait(uint64 fence, bigtime_t timeout) const;
 	status_t Status(EngineStatus& status) const;
 	status_t Read(uint32 offset, uint32& value) const;
+	status_t GetFramebuffer(Framebuffer& framebuffer) const;
+	status_t GetDisplayStatus(DisplayStatus& status) const;
 	int FD() const { return fFD; }
 private:
 	Device(const Device&) = delete;

@@ -30,6 +30,9 @@ public:
 	// Maps the pages of an area at the given GPU address. The address and the
 	// area's size are page aligned; overlapping maps are rejected.
 	status_t Map(area_id area, uint64 address);
+	// Maps memory this object does not own, such as the display's
+	// framebuffer, which the global page table already points at.
+	status_t MapPhysical(uint64 address, phys_addr_t physical, uint64 size);
 	status_t Unmap(uint64 address, uint64 size);
 
 private:

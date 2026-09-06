@@ -257,6 +257,54 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 				+ request.offset);
 			return user_memcpy(userBuffer, &request, sizeof(request));
 		}
+		case kFramebuffer: {
+			Framebuffer request;
+			status_t status = ReadRequest(userBuffer, length, request);
+			if (status != B_OK)
+				return status;
+			if (fDevice == NULL || fDevice->shared_info == NULL)
+				return B_NOT_SUPPORTED;
+			const intel_shared_info& shared = *fDevice->shared_info;
+			if (shared.frame_buffer == 0 || shared.bytes_per_row == 0)
+				return B_NOT_SUPPORTED;
+			request.address = shared.frame_buffer_offset;
+			request.pitch = shared.bytes_per_row;
+			request.width = shared.current_mode.virtual_width;
+			request.height = shared.current_mode.virtual_height;
+			request.bitsPerPixel = shared.bits_per_pixel;
+			// Commands run against the engine's page tables, so the
+			// framebuffer has to be reachable there as well.
+			if (fEngine != NULL && fEngine->IsReady() && fGTT != NULL) {
+				status = fEngine->MapGlobalRange(*fGTT, request.address,
+					(uint64)request.pitch * request.height);
+				if (status != B_OK)
+					return status;
+			}
+			return user_memcpy(userBuffer, &request, sizeof(request));
+		}
+		case kDisplayStatus: {
+			DisplayStatus request;
+			status_t status = ReadRequest(userBuffer, length, request);
+			if (status != B_OK)
+				return status;
+			if (fDevice == NULL)
+				return B_NOT_SUPPORTED;
+			request.vblankCount = fDevice->vblank_count;
+			request.masterInterrupt = *(volatile uint32*)(fDevice->registers
+				+ 0x44200);
+			for (uint32 pipe = 0; pipe < 3; pipe++) {
+				request.pipeInterruptEnable[pipe]
+					= *(volatile uint32*)(fDevice->registers
+						+ 0x4440c + 0x10 * pipe);
+				request.pipeInterruptMask[pipe]
+					= *(volatile uint32*)(fDevice->registers
+						+ 0x44404 + 0x10 * pipe);
+				request.frameCount[pipe]
+					= *(volatile uint32*)(fDevice->registers
+						+ 0x70040 + 0x1000 * pipe);
+			}
+			return user_memcpy(userBuffer, &request, sizeof(request));
+		}
 		case kEngineStatus: {
 			EngineStatus request;
 			status_t status = ReadRequest(userBuffer, length, request);
