@@ -603,6 +603,27 @@ intel_get_backlight_register(bool period)
 }
 
 
+/*!	Whether this machine has a panel backlight to control at all. The device
+	table says whether a chip is a mobile one, but it has been wrong about
+	that, and a laptop whose entry says otherwise then has no way to dim its
+	screen. The hardware is the better witness: firmware leaves a period
+	programmed in the backlight modulation register on a machine that has a
+	backlight, and leaves it at zero on one that does not.
+*/
+bool
+intel_has_backlight()
+{
+	uint32 period = read32(intel_get_backlight_register(true));
+	if (gInfo->shared_info->pch_info >= INTEL_PCH_SPT
+		&& gInfo->shared_info->pch_info < INTEL_PCH_CNP) {
+		// Here the period is the upper half of a register it shares with the
+		// duty cycle.
+		period >>= 16;
+	}
+	return period != 0;
+}
+
+
 status_t
 intel_set_brightness(float brightness)
 {

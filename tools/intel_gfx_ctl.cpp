@@ -4,8 +4,10 @@
 #include "DeviceRoster.h"
 #include "ServerProtocol.h"
 
+#include <Application.h>
 #include <Message.h>
 #include <Messenger.h>
+#include <Screen.h>
 #include <new>
 #include <errno.h>
 #include <stdio.h>
@@ -554,10 +556,42 @@ static status_t Vblank(Device& device)
 }
 
 
+// The panel backlight, through the same interface anything else on the
+// system uses, so that this says whether brightness works for applications
+// rather than only whether the register can be written.
+static status_t Brightness(const char* value)
+{
+	BApplication application("application/x-vnd.IntelGfx-ctl");
+	BScreen screen(B_MAIN_SCREEN_ID);
+	if (!screen.IsValid())
+		return B_ERROR;
+
+	if (value != NULL) {
+		float wanted = strtof(value, NULL);
+		if (wanted < 0.0f || wanted > 1.0f) {
+			fputs("Brightness runs from 0 to 1.\n", stderr);
+			return B_BAD_VALUE;
+		}
+		status_t status = screen.SetBrightness(wanted);
+		if (status != B_OK)
+			return status;
+	}
+
+	float current = -1.0f;
+	status_t status = screen.GetBrightness(&current);
+	if (status != B_OK)
+		return status;
+	printf("Backlight at %d%%\n", (int)(current * 100.0f + 0.5f));
+	return B_OK;
+}
+
+
 int main(int argc, char** argv)
 {
 	status_t status = B_BAD_VALUE;
-	if (argc == 2 && strcmp(argv[1], "list") == 0) {
+	if (argc >= 2 && strcmp(argv[1], "brightness") == 0) {
+		status = Brightness(argc > 2 ? argv[2] : NULL);
+	} else if (argc == 2 && strcmp(argv[1], "list") == 0) {
 		BMessage reply;
 		status = ListDevices(reply);
 		if (status == B_OK)
@@ -618,8 +652,8 @@ int main(int argc, char** argv)
 		fprintf(stderr, "Usage: %s list | service-info | info DEVICE"
 			" | buffer-test DEVICE | gtt-test DEVICE"
 			" | submit-test DEVICE | engine-status DEVICE"
-			" | displays DEVICE | fill-test DEVICE | vblank DEVICE\n",
-			argv[0]);
+			" | displays DEVICE | fill-test DEVICE | vblank DEVICE"
+			" | brightness [0..1]\n", argv[0]);
 		return 2;
 	}
 	if (status != B_OK)

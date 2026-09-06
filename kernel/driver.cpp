@@ -138,12 +138,12 @@ const struct supported_device {
 	{0x1902, INTEL_MODEL_SKY,  "Skylake GT1"},
 	{0x1906, INTEL_MODEL_SKYM, "Skylake GT1"},
 	{0x190a, INTEL_MODEL_SKYS, "Skylake GT1"},
-	{0x190b, INTEL_MODEL_SKY,  "Skylake GT1"},
+	{0x190b, INTEL_MODEL_SKYM, "Skylake Halo GT1"},
 	{0x190e, INTEL_MODEL_SKYM, "Skylake GT1"},
 	{0x1912, INTEL_MODEL_SKY,  "Skylake GT2"}, //confirmed OK
 	{0x1916, INTEL_MODEL_SKYM, "Skylake GT2"}, //confirmed native mode panel OK
 	{0x191a, INTEL_MODEL_SKYS, "Skylake GT2"},
-	{0x191b, INTEL_MODEL_SKY,  "Skylake GT2"},
+	{0x191b, INTEL_MODEL_SKYM, "Skylake Halo GT2"}, //confirmed, ThinkPad P50
 	{0x191d, INTEL_MODEL_SKY,  "Skylake GT2"},
 	{0x191e, INTEL_MODEL_SKYM, "Skylake GT2"},
 	{0x1921, INTEL_MODEL_SKYM, "Skylake GT2F"},

@@ -37,6 +37,7 @@ status_t intel_get_preferred_mode(display_mode* preferredMode);
 status_t intel_set_display_mode(display_mode* mode);
 status_t intel_get_display_mode(display_mode* currentMode);
 status_t intel_get_edid_info(void* info, size_t size, uint32* _version);
+bool intel_has_backlight();
 status_t intel_set_brightness(float brightness);
 status_t intel_get_brightness(float* brightness);
 status_t intel_get_frame_buffer_config(frame_buffer_config* config);

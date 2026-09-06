@@ -50,12 +50,16 @@ get_accelerant_hook(uint32 feature, void* data)
 
 		/* laptop panel backlight */
 		case B_SET_BRIGHTNESS:
-			if (gInfo->shared_info->device_type.IsMobile())
+			// Note that this case must not fall through to the next one: a
+			// machine without a backlight would answer a request to set the
+			// brightness with the function that reads it, and the caller
+			// would hand a float to something expecting a pointer.
+			if (intel_has_backlight())
 				return (void*)intel_set_brightness;
+			return NULL;
 		case B_GET_BRIGHTNESS:
-			if (gInfo->shared_info->device_type.IsMobile())
+			if (intel_has_backlight())
 				return (void*)intel_get_brightness;
-
 			return NULL;
 #endif
 		case B_GET_FRAME_BUFFER_CONFIG:
