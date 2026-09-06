@@ -19,7 +19,7 @@ static status_t Open(const char*, uint32, void** cookie)
 	// No device, so no page table: binding must report kGpuVirtualMemory
 	// absent and refuse every graphics address rather than inventing one.
 	IntelGfx::RenderClient* client
-		= new(std::nothrow) IntelGfx::RenderClient(NULL, info, NULL, NULL);
+		= new(std::nothrow) IntelGfx::RenderClient(NULL, info, NULL, NULL, NULL);
 	if (client == NULL)
 		return B_NO_MEMORY;
 	*cookie = client;

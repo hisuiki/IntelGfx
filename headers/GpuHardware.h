@@ -126,6 +126,45 @@ static constexpr uint32 kBlitDepth32 = 3 << 24;
 static constexpr uint32 kBlitRopColorCopy = 0xf0 << 16;
 static constexpr uint32 kBlitRopSourceCopy = 0xcc << 16;
 
+// The render engine does not take the flush the other engines use. Its
+// caches are emptied with a pipe control, which is also how it writes a value
+// out once everything before it has landed.
+static constexpr uint32 kPipeControl(uint32 length)
+{
+	return (3 << 29) | (3 << 27) | (2 << 24) | (length - 2);
+}
+
+static constexpr uint32 kPipeControlGlobalGtt = 1 << 24;
+static constexpr uint32 kPipeControlTlbInvalidate = 1 << 18;
+static constexpr uint32 kPipeControlStall = 1 << 20;
+static constexpr uint32 kPipeControlQwordWrite = 1 << 14;
+static constexpr uint32 kPipeControlRenderTargetFlush = 1 << 12;
+static constexpr uint32 kPipeControlFlush = 1 << 7;
+static constexpr uint32 kPipeControlDataCacheFlush = 1 << 5;
+static constexpr uint32 kPipeControlDepthFlush = 1 << 0;
+
+// The page attribute table, which is what the bits in a page table entry
+// actually select. Every access this driver makes lands on entry zero: the
+// per-process entries are written without cacheability bits, and the global
+// table has no such bits at all, its accesses always using entry zero. So
+// entry zero decides whether the processor and the GPU see each other's
+// writes, and nothing on a Haiku system programs this table.
+static const uint32 kPrivatePatLow = 0x40e0;
+static const uint32 kPrivatePatHigh = 0x40e4;
+
+static constexpr uint64 kPatEntry(uint32 index, uint64 value)
+{
+	return value << (index * 8);
+}
+
+static constexpr uint64 kPatUncached = 0 << 0;
+static constexpr uint64 kPatWriteCombining = 1 << 0;
+static constexpr uint64 kPatWriteThrough = 2 << 0;
+static constexpr uint64 kPatWriteBack = 3 << 0;
+static constexpr uint64 kPatLastLevelCache = 1 << 2;
+static constexpr uint64 kPatBothCaches = 2 << 2;
+static constexpr uint64 kPatAge(uint64 age) { return age << 4; }
+
 // Page table entries of the per-process page tables. Cacheability is chosen
 // by an index into the PAT registers, formed from three scattered bits; index
 // zero is the write-back entry the firmware and every other driver assume.

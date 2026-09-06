@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 #include "GlobalGTT.h"
 
+#include "GpuHardware.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <util/AutoLock.h>
@@ -120,6 +122,25 @@ GlobalGTT::Init(addr_t registers, uint64 barSize, uint32 generation,
 	fScratchArea = scratchArea;
 	fScratchPage = entry.address;
 	fUsed = used;
+
+	// Say what the cacheability bits of a page table entry mean before using
+	// any. These are the assignments Linux makes on the same hardware, and
+	// they matter because everything here lands on entry zero: written back
+	// and kept in the last level cache, which is what lets the processor and
+	// the GPU see each other's writes without either flushing by hand.
+	uint64 attributes =
+		kPatEntry(0, kPatWriteBack | kPatLastLevelCache)
+		| kPatEntry(1, kPatWriteCombining | kPatBothCaches)
+		| kPatEntry(2, kPatWriteBack)			// scanout with an eLLC
+		| kPatEntry(3, kPatUncached)
+		| kPatEntry(4, kPatWriteBack | kPatBothCaches | kPatAge(0))
+		| kPatEntry(5, kPatWriteBack | kPatBothCaches | kPatAge(1))
+		| kPatEntry(6, kPatWriteBack | kPatBothCaches | kPatAge(2))
+		| kPatEntry(7, kPatWriteBack | kPatBothCaches | kPatAge(3));
+	*(volatile uint32*)(fRegisters + kPrivatePatLow) = (uint32)attributes;
+	*(volatile uint32*)(fRegisters + kPrivatePatHigh)
+		= (uint32)(attributes >> 32);
+	(void)*(volatile uint32*)(fRegisters + kPrivatePatLow);
 
 	// Whatever the firmware left in this range must not alias memory that was
 	// never bound here.

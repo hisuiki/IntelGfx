@@ -210,6 +210,31 @@ embedded controller reports them as ACPI events on the vendor's hotkey
 device, which Haiku has no driver for. Making those keys work needs that
 driver, not this filter.
 
+## The render engine
+
+The blitter is fully working. The render engine, which is the one 3D work
+needs, is not, and it is worth being precise about how far it gets: it loads
+its context, executes the whole ring including the batch, writes its fence
+with the pipe control that engine takes instead of a flush, saves 397 dwords
+of context image back, and reports itself complete with no error. The only
+thing that does not happen is the batch's store becoming visible, and a
+second submission then finds the engine wedged.
+
+Two things were ruled out along the way. The fence write proves the ring, the
+context and the execution list port all work on that engine, and the batch
+running to its end proves it was fetched through the per-process page tables.
+The page attribute table is now programmed the way Linux programs it, because
+nothing on a Haiku system did: every access this driver makes lands on entry
+zero, whose meaning was whatever firmware happened to leave. That was worth
+fixing on its own and did not change this symptom.
+
+What remains to look at is the state a fresh render context starts in. Linux
+initialises one from a golden image produced by running a long state setup
+batch, and a render pipeline that has never been configured is a plausible
+reason for a store to go nowhere and a pipe control to hang. Note that a real
+3D driver sets all of that state in its own batches, so this may matter less
+to Mesa than it does to a test that sets none.
+
 ## Test image
 
 `image.py` builds a bootable Haiku image with this driver already in place, for

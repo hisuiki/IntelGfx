@@ -12,6 +12,23 @@
 
 namespace IntelGfx {
 
+// What distinguishes one engine from another, all of which are driven the
+// same way once these are known.
+struct EngineDescriptor {
+	const char* name;
+	uint32 base;
+	uint32 forcewake;
+	uint32 forcewakeAck;
+	const uint8* layout;
+	size_t contextSize;
+	// The render engine empties its caches with a pipe control rather than
+	// the flush the other engines take, and writes its fence the same way.
+	bool usesPipeControl;
+};
+
+extern const EngineDescriptor kBlitterEngine;
+extern const EngineDescriptor kRenderEngine;
+
 // The blitter engine of a generation 9 GPU, driven the way the hardware
 // expects since generation 8: work is described by a logical ring context
 // whose address is handed to the engine's execution list submit port, and the
@@ -30,7 +47,9 @@ public:
 	RenderEngine();
 	~RenderEngine();
 
-	status_t Init(addr_t registers, GlobalGTT& gtt);
+	status_t Init(addr_t registers, GlobalGTT& gtt,
+		const EngineDescriptor& engine);
+	const char* Name() const { return fEngine->name; }
 	bool IsReady() const { return fReady; }
 
 	// Client buffers are mapped into the engine's page tables at the same
@@ -60,7 +79,7 @@ private:
 	status_t _WaitSeqno(uint32 seqno, bigtime_t timeout);
 
 	addr_t fRegisters;
-	uint32 fBase;
+	const EngineDescriptor* fEngine;
 	bool fReady;
 
 	BufferObject fStatusPage;	// the engine's own status page

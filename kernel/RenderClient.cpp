@@ -23,10 +23,13 @@ ReadRequest(void* userBuffer, size_t length, T& request)
 }
 
 RenderClient::RenderClient(intel_info* device, const DeviceInfo& info,
-	GlobalGTT* gtt, RenderEngine* engine)
-	: fDevice(device), fInfo(info), fGTT(gtt), fEngine(engine), fNextHandle(1),
+	GlobalGTT* gtt, RenderEngine* blitter, RenderEngine* render)
+	: fDevice(device), fInfo(info), fGTT(gtt), fNextHandle(1),
 	fAllocated(0), fBound(0)
 {
+	fEngines[0] = blitter;
+	fEngines[1] = render;
+
 	mutex_init(&fLock, "intel_gfx client");
 	memset(fBuffers, 0, sizeof(fBuffers));
 	memset(fHandles, 0, sizeof(fHandles));
@@ -43,7 +46,7 @@ RenderClient::RenderClient(intel_info* device, const DeviceInfo& info,
 		fInfo.graphicsAddressSize = 0;
 	}
 
-	if (fEngine != NULL && fEngine->IsReady())
+	if (_Engine(0) != NULL)
 		fInfo.capabilities |= kRenderSubmission;
 	else
 		fInfo.capabilities &= ~(uint64)kRenderSubmission;
@@ -56,6 +59,16 @@ RenderClient::~RenderClient()
 		delete fBuffers[i];
 	mutex_destroy(&fLock);
 }
+
+RenderEngine*
+RenderClient::_Engine(uint32 flags) const
+{
+	RenderEngine* engine = fEngines[(flags & kUseRenderEngine) != 0 ? 1 : 0];
+	if (engine == NULL || !engine->IsReady())
+		return NULL;
+	return engine;
+}
+
 
 BufferObject*
 RenderClient::_Find(uint32 handle, uint32* _slot) const
@@ -132,9 +145,11 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			if (buffer == NULL)
 				return B_ENTRY_NOT_FOUND;
 			if (buffer->IsBound()) {
-				if (fEngine != NULL && fEngine->IsReady()) {
-					fEngine->UnmapBuffer(buffer->GraphicsAddress(),
-						buffer->Size());
+				for (uint32 i = 0; i < B_COUNT_OF(fEngines); i++) {
+					if (fEngines[i] != NULL && fEngines[i]->IsReady()) {
+						fEngines[i]->UnmapBuffer(buffer->GraphicsAddress(),
+							buffer->Size());
+					}
 				}
 				fBound -= buffer->Size();
 			}
@@ -164,10 +179,12 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			status = buffer->Bind(*fGTT);
 			if (status != B_OK)
 				return status;
-			if (fEngine != NULL && fEngine->IsReady()) {
-				// The same address has to mean the same buffer to commands
-				// running against the engine's own page tables.
-				status = fEngine->MapBuffer(buffer->Area(),
+			// The same address has to mean the same buffer to commands
+			// running against either engine's own page tables.
+			for (uint32 i = 0; i < B_COUNT_OF(fEngines); i++) {
+				if (fEngines[i] == NULL || !fEngines[i]->IsReady())
+					continue;
+				status = fEngines[i]->MapBuffer(buffer->Area(),
 					buffer->GraphicsAddress());
 				if (status != B_OK) {
 					buffer->Unbind();
@@ -198,8 +215,10 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			uint64 size = buffer->Size();
 			uint64 address = buffer->GraphicsAddress();
 			status = buffer->Unbind();
-			if (fEngine != NULL && fEngine->IsReady())
-				fEngine->UnmapBuffer(address, size);
+			for (uint32 i = 0; i < B_COUNT_OF(fEngines); i++) {
+				if (fEngines[i] != NULL && fEngines[i]->IsReady())
+					fEngines[i]->UnmapBuffer(address, size);
+			}
 			fBound -= size;
 			return status;
 		}
@@ -208,11 +227,13 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			status_t status = ReadRequest(userBuffer, length, request);
 			if (status != B_OK)
 				return status;
-			if (request.flags != 0 || request.handle == 0
+			if ((request.flags & ~(uint32)kUseRenderEngine) != 0
+				|| request.handle == 0
 				|| request.fence != 0 || (request.offset & 0x3) != 0
 				|| request.length == 0 || (request.length & 0x3) != 0)
 				return B_BAD_VALUE;
-			if (fEngine == NULL || !fEngine->IsReady())
+			RenderEngine* engine = _Engine(request.flags);
+			if (engine == NULL)
 				return B_NOT_SUPPORTED;
 			BufferObject* buffer = _Find(request.handle);
 			if (buffer == NULL)
@@ -223,7 +244,7 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 				|| request.length > buffer->Size() - request.offset)
 				return B_BAD_VALUE;
 			uint64 fence = 0;
-			status = fEngine->Submit(buffer->GraphicsAddress() + request.offset,
+			status = engine->Submit(buffer->GraphicsAddress() + request.offset,
 				(uint32)request.length, fence);
 			if (status != B_OK)
 				return status;
@@ -235,11 +256,12 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			status_t status = ReadRequest(userBuffer, length, request);
 			if (status != B_OK)
 				return status;
-			if (fEngine == NULL || !fEngine->IsReady())
+			RenderEngine* engine = _Engine(0);
+			if (engine == NULL)
 				return B_NOT_SUPPORTED;
 			if (request.timeout > 10000000)
 				return B_BAD_VALUE;
-			return fEngine->Wait(request.fence, (bigtime_t)request.timeout);
+			return engine->Wait(request.fence, (bigtime_t)request.timeout);
 		}
 		case kReadRegister: {
 			ReadRegister request;
@@ -274,8 +296,10 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			request.bitsPerPixel = shared.bits_per_pixel;
 			// Commands run against the engine's page tables, so the
 			// framebuffer has to be reachable there as well.
-			if (fEngine != NULL && fEngine->IsReady() && fGTT != NULL) {
-				status = fEngine->MapGlobalRange(*fGTT, request.address,
+			for (uint32 i = 0; i < B_COUNT_OF(fEngines) && fGTT != NULL; i++) {
+				if (fEngines[i] == NULL || !fEngines[i]->IsReady())
+					continue;
+				status = fEngines[i]->MapGlobalRange(*fGTT, request.address,
 					(uint64)request.pitch * request.height);
 				if (status != B_OK)
 					return status;
@@ -310,9 +334,12 @@ RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 			status_t status = ReadRequest(userBuffer, length, request);
 			if (status != B_OK)
 				return status;
-			if (fEngine == NULL || !fEngine->IsReady())
+			// The reserved field selects the engine, so that either can be
+			// asked what it is doing.
+			RenderEngine* engine = _Engine(request.statusBuffer[0]);
+			if (engine == NULL)
 				return B_NOT_SUPPORTED;
-			status = fEngine->Status(request);
+			status = engine->Status(request);
 			if (status != B_OK)
 				return status;
 			return user_memcpy(userBuffer, &request, sizeof(request));

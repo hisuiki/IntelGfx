@@ -90,6 +90,40 @@ static const uint8 kEngineStateLayout[] = {
 	0
 };
 
+// The render engine's image, which differs from the one above in a single
+// block: where the other engines carry a register of their own, this one
+// carries the power and clock state that says which slices a context runs on.
+static const uint8 kRenderStateLayout[] = {
+	NOP(1),
+	LRI(14, POSTED),
+	REG16(0x244), REG(0x034), REG(0x030), REG(0x038), REG(0x03c),
+	REG(0x168), REG(0x140), REG(0x110), REG(0x11c), REG(0x114),
+	REG(0x118), REG(0x1c0), REG(0x1c4), REG(0x1c8),
+
+	NOP(3),
+	LRI(9, POSTED),
+	REG16(0x3a8), REG16(0x28c), REG16(0x288), REG16(0x284), REG16(0x280),
+	REG16(0x27c), REG16(0x278), REG16(0x274), REG16(0x270),
+
+	NOP(13),
+	LRI(1, 0),
+	REG(0x0c8),			// GEN8_R_PWR_CLK_STATE
+
+	NOP(13),
+	LRI(44, POSTED),
+	REG(0x028), REG(0x09c), REG(0x0c0), REG(0x178), REG(0x17c),
+	REG16(0x358), REG(0x170), REG(0x150), REG(0x154), REG(0x158),
+	REG16(0x41c), REG16(0x600), REG16(0x604), REG16(0x608), REG16(0x60c),
+	REG16(0x610), REG16(0x614), REG16(0x618), REG16(0x61c), REG16(0x620),
+	REG16(0x624), REG16(0x628), REG16(0x62c), REG16(0x630), REG16(0x634),
+	REG16(0x638), REG16(0x63c), REG16(0x640), REG16(0x644), REG16(0x648),
+	REG16(0x64c), REG16(0x650), REG16(0x654), REG16(0x658), REG16(0x65c),
+	REG16(0x660), REG16(0x664), REG16(0x668), REG16(0x66c), REG16(0x670),
+	REG16(0x674), REG16(0x678), REG16(0x67c), REG(0x068),
+
+	0
+};
+
 #undef NOP
 #undef LRI
 #undef REG
@@ -97,10 +131,23 @@ static const uint8 kEngineStateLayout[] = {
 #undef POSTED
 
 
+// The two engines this driver can drive. They differ in where their
+// registers are, which forcewake domain keeps them awake, the shape of their
+// context image, and how much room that image needs.
+const EngineDescriptor kBlitterEngine = {
+	"blitter", kBlitterEngineBase, kForcewakeBlitter, kForcewakeBlitterAck,
+	kEngineStateLayout, 4 * B_PAGE_SIZE, false
+};
+
+const EngineDescriptor kRenderEngine = {
+	"render", kRenderEngineBase, kForcewakeRender, kForcewakeRenderAck,
+	kRenderStateLayout, 24 * B_PAGE_SIZE, true
+};
+
+
 static void
-WriteStateLayout(uint32* state, uint32 base)
+WriteStateLayout(uint32* state, uint32 base, const uint8* data)
 {
-	const uint8* data = kEngineStateLayout;
 	uint32* registers = state;
 
 	while (*data != 0) {
@@ -137,7 +184,7 @@ WriteStateLayout(uint32* state, uint32 base)
 RenderEngine::RenderEngine()
 	:
 	fRegisters(0),
-	fBase(kBlitterEngineBase),
+	fEngine(&kBlitterEngine),
 	fReady(false),
 	fRegisterState(NULL),
 	fRingSize(kRingSize),
@@ -154,7 +201,7 @@ RenderEngine::~RenderEngine()
 		// Leave the engine as it was found: no execution list, and nothing
 		// pointing at memory that is about to be freed.
 		if (_Forcewake(true) == B_OK) {
-			_Write(fBase + kRingMode, Masked(kExeclistEnable, false));
+			_Write(fEngine->base + kRingMode, Masked(kExeclistEnable, false));
 			_Forcewake(false);
 		}
 	}
@@ -179,12 +226,11 @@ RenderEngine::_Write(uint32 offset, uint32 value)
 status_t
 RenderEngine::_Forcewake(bool take)
 {
-	// The blitter's registers live in the domain generation 9 calls GT.
-	_Write(kForcewakeBlitter, Masked(kForcewakeKernel, take));
+	_Write(fEngine->forcewake, Masked(kForcewakeKernel, take));
 
 	bigtime_t deadline = system_time() + kForcewakeTimeout;
 	while (system_time() < deadline) {
-		bool awake = (_Read(kForcewakeBlitterAck) & kForcewakeKernel) != 0;
+		bool awake = (_Read(fEngine->forcewakeAck) & kForcewakeKernel) != 0;
 		if (awake == take)
 			return B_OK;
 		spin(10);
@@ -200,7 +246,7 @@ RenderEngine::_InitContext()
 	memset(context, 0, fContext.Size());
 
 	fRegisterState = (uint32*)(context + kStateOffset);
-	WriteStateLayout(fRegisterState, fBase);
+	WriteStateLayout(fRegisterState, fEngine->base, fEngine->layout);
 
 	// Hold off the synchronous context switch, let the context be saved, and
 	// ask for the first restore to be inhibited: the image starts out zeroed
@@ -226,10 +272,12 @@ RenderEngine::_InitContext()
 
 
 status_t
-RenderEngine::Init(addr_t registers, GlobalGTT& gtt)
+RenderEngine::Init(addr_t registers, GlobalGTT& gtt,
+	const EngineDescriptor& engine)
 {
 	if (fReady)
 		return B_BUSY;
+	fEngine = &engine;
 	if (registers == 0 || !gtt.IsValid())
 		return B_NOT_SUPPORTED;
 
@@ -238,7 +286,7 @@ RenderEngine::Init(addr_t registers, GlobalGTT& gtt)
 	struct { BufferObject* buffer; size_t size; } objects[] = {
 		{ &fStatusPage, B_PAGE_SIZE },
 		{ &fFencePage, B_PAGE_SIZE },
-		{ &fContext, kContextSize },
+		{ &fContext, fEngine->contextSize },
 		{ &fRing, fRingSize }
 	};
 	for (size_t i = 0; i < B_COUNT_OF(objects); i++) {
@@ -272,13 +320,13 @@ RenderEngine::Init(addr_t registers, GlobalGTT& gtt)
 	// nothing about this engine, so keep its interrupts to itself.
 	_Write(kGtInterruptEnable0, 0);
 	_Write(kGtInterruptMask0, ~0u);
-	_Write(fBase + kRingHardwareStatusMask, ~0u);
+	_Write(fEngine->base + kRingHardwareStatusMask, ~0u);
 
-	_Write(fBase + kRingMode, Masked(kExeclistEnable, true));
-	_Write(fBase + kRingMiMode, Masked(kStopRing, false));
-	_Write(fBase + kRingHardwareStatusPage,
+	_Write(fEngine->base + kRingMode, Masked(kExeclistEnable, true));
+	_Write(fEngine->base + kRingMiMode, Masked(kStopRing, false));
+	_Write(fEngine->base + kRingHardwareStatusPage,
 		(uint32)fStatusPage.GraphicsAddress());
-	(void)_Read(fBase + kRingHardwareStatusPage);
+	(void)_Read(fEngine->base + kRingHardwareStatusPage);
 
 	_Forcewake(false);
 
@@ -402,7 +450,9 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 			return status;
 	}
 
-	const uint32 kCommandDwords = 8;
+	// The batch, then whatever this engine needs to make its work visible
+	// and say so. Room for the longest of the two shapes below.
+	const uint32 kCommandDwords = 16;
 	if (fRingTail + kCommandDwords * 4 > fRingSize) {
 		// Pad the rest of the ring so the engine runs into the wrap cleanly.
 		uint32* pad = (uint32*)((uint8*)fRing.Address() + fRingTail);
@@ -418,14 +468,39 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	// Run the client's commands, then flush and write the sequence number:
 	// the flush is what makes everything the batch wrote visible before the
 	// fence says it is.
-	ring[0] = kMiBatchBufferStart | kMiBatchBufferPerProcess;
-	ring[1] = (uint32)batchAddress;
-	ring[2] = (uint32)(batchAddress >> 32);
-	ring[3] = kMiFlushDword | kMiFlushStoreDword;
-	ring[4] = fenceAddress | kMiFlushUseGlobalGtt;
-	ring[5] = 0;
-	ring[6] = seqno;
-	ring[7] = kMiNoop;
+	uint32 at = 0;
+	ring[at++] = kMiBatchBufferStart | kMiBatchBufferPerProcess;
+	ring[at++] = (uint32)batchAddress;
+	ring[at++] = (uint32)(batchAddress >> 32);
+
+	if (fEngine->usesPipeControl) {
+		// Empty the render caches first, then write the fence in a second
+		// pipe control: the hardware dislikes being asked to do both at once.
+		ring[at++] = kPipeControl(6);
+		ring[at++] = kPipeControlStall | kPipeControlTlbInvalidate
+			| kPipeControlRenderTargetFlush | kPipeControlDepthFlush
+			| kPipeControlDataCacheFlush;
+		ring[at++] = 0;
+		ring[at++] = 0;
+		ring[at++] = 0;
+		ring[at++] = 0;
+
+		ring[at++] = kPipeControl(6);
+		ring[at++] = kPipeControlQwordWrite | kPipeControlGlobalGtt
+			| kPipeControlFlush | kPipeControlStall;
+		ring[at++] = fenceAddress;
+		ring[at++] = 0;
+		ring[at++] = seqno;
+		ring[at++] = 0;
+	} else {
+		ring[at++] = kMiFlushDword | kMiFlushStoreDword;
+		ring[at++] = fenceAddress | kMiFlushUseGlobalGtt;
+		ring[at++] = 0;
+		ring[at++] = seqno;
+	}
+
+	while (at < kCommandDwords)
+		ring[at++] = kMiNoop;
 
 	fRingTail += kCommandDwords * 4;
 	FlushRange(ring, kCommandDwords * 4);
@@ -443,10 +518,10 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		return status;
 
 	// An empty second port, then ours: the hardware reads both.
-	_Write(fBase + kRingExeclistSubmitPort, 0);
-	_Write(fBase + kRingExeclistSubmitPort, 0);
-	_Write(fBase + kRingExeclistSubmitPort, (uint32)(descriptor >> 32));
-	_Write(fBase + kRingExeclistSubmitPort, (uint32)descriptor);
+	_Write(fEngine->base + kRingExeclistSubmitPort, 0);
+	_Write(fEngine->base + kRingExeclistSubmitPort, 0);
+	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)(descriptor >> 32));
+	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)descriptor);
 
 	_Forcewake(false);
 
@@ -466,20 +541,20 @@ RenderEngine::Status(EngineStatus& status)
 	if (forcewake != B_OK)
 		return forcewake;
 
-	status.ringHead = _Read(fBase + kRingHead);
-	status.ringTail = _Read(fBase + kRingTail);
-	status.ringStart = _Read(fBase + kRingStart);
-	status.ringControl = _Read(fBase + kRingControl);
-	status.activeHead = _Read(fBase + kRingActiveHead);
-	status.instructionHeader = _Read(fBase + kRingInstructionHeader);
-	status.errorIdentity = _Read(fBase + kRingErrorIdentity);
-	status.miMode = _Read(fBase + kRingMiMode);
-	status.mode = _Read(fBase + kRingMode);
-	status.execlistStatusLow = _Read(fBase + kRingExeclistStatus);
-	status.execlistStatusHigh = _Read(fBase + kRingExeclistStatus + 4);
-	status.statusPointer = _Read(fBase + kRingContextStatusPointer);
+	status.ringHead = _Read(fEngine->base + kRingHead);
+	status.ringTail = _Read(fEngine->base + kRingTail);
+	status.ringStart = _Read(fEngine->base + kRingStart);
+	status.ringControl = _Read(fEngine->base + kRingControl);
+	status.activeHead = _Read(fEngine->base + kRingActiveHead);
+	status.instructionHeader = _Read(fEngine->base + kRingInstructionHeader);
+	status.errorIdentity = _Read(fEngine->base + kRingErrorIdentity);
+	status.miMode = _Read(fEngine->base + kRingMiMode);
+	status.mode = _Read(fEngine->base + kRingMode);
+	status.execlistStatusLow = _Read(fEngine->base + kRingExeclistStatus);
+	status.execlistStatusHigh = _Read(fEngine->base + kRingExeclistStatus + 4);
+	status.statusPointer = _Read(fEngine->base + kRingContextStatusPointer);
 	status.interruptStatus = _Read(kGtInterruptStatus0);
-	status.hardwareStatusAddress = _Read(fBase + kRingHardwareStatusPage);
+	status.hardwareStatusAddress = _Read(fEngine->base + kRingHardwareStatusPage);
 
 	_Forcewake(false);
 

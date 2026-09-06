@@ -68,10 +68,11 @@ status_t Device::Unbind(uint32 handle) const
 }
 
 status_t Device::Submit(uint32 handle, uint64 offset, uint64 length,
-	uint64& fence) const
+	uint64& fence, uint32 flags) const
 {
 	SubmitBatch request = Request<SubmitBatch>();
 	request.handle = handle;
+	request.flags = flags;
 	request.offset = offset;
 	request.length = length;
 	if (ioctl(fFD, kSubmit, &request, sizeof(request)) < 0)
@@ -88,9 +89,10 @@ status_t Device::Wait(uint64 fence, bigtime_t timeout) const
 	return ioctl(fFD, kWaitFence, &request, sizeof(request)) < 0 ? errno : B_OK;
 }
 
-status_t Device::Status(EngineStatus& status) const
+status_t Device::Status(EngineStatus& status, uint32 flags) const
 {
 	status = Request<EngineStatus>();
+	status.statusBuffer[0] = flags;
 	return ioctl(fFD, kEngineStatus, &status, sizeof(status)) < 0 ? errno : B_OK;
 }
 

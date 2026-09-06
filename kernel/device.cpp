@@ -206,6 +206,24 @@ graphics_translation_table_size(intel_info& info)
 }
 
 
+static IntelGfx::RenderEngine*
+create_engine(intel_info& info, IntelGfx::GlobalGTT& gtt,
+	const IntelGfx::EngineDescriptor& descriptor)
+{
+	IntelGfx::RenderEngine* engine = new(std::nothrow) IntelGfx::RenderEngine;
+	if (engine == NULL)
+		return NULL;
+
+	status_t status = engine->Init(info.registers, gtt, descriptor);
+	if (status != B_OK) {
+		TRACE("no %s engine: %s\n", descriptor.name, strerror(status));
+		delete engine;
+		return NULL;
+	}
+	return engine;
+}
+
+
 // Builds the device's global address space, once, on first open. Failure is
 // not fatal: the device keeps working as a display, only without GPU memory.
 static void
@@ -245,20 +263,11 @@ init_graphics_translation_table(intel_info& info)
 
 	info.gtt = gtt;
 
-	// The engine is optional in the same way: without it the device is a
-	// display that can pin memory, which is what it was before.
-	IntelGfx::RenderEngine* engine = new(std::nothrow) IntelGfx::RenderEngine;
-	if (engine == NULL)
-		return;
-
-	status = engine->Init(info.registers, *gtt);
-	if (status != B_OK) {
-		TRACE("no GPU submission: %s\n", strerror(status));
-		delete engine;
-		return;
-	}
-
-	info.engine = engine;
+	// Engines are optional in the same way: without them the device is a
+	// display that can pin memory, which is what it was before. The blitter
+	// runs memory commands, the render engine is the one 3D work needs.
+	info.engine = create_engine(info, *gtt, IntelGfx::kBlitterEngine);
+	info.render_engine = create_engine(info, *gtt, IntelGfx::kRenderEngine);
 }
 
 
@@ -281,7 +290,7 @@ create_render_client(intel_info& info)
 	renderInfo.graphicsVersion = generation >= 8 ? (uint32)generation : 0;
 
 	return new(std::nothrow) IntelGfx::RenderClient(&info, renderInfo, info.gtt,
-		info.engine);
+		info.engine, info.render_engine);
 }
 
 
@@ -290,6 +299,8 @@ uninit_device(intel_info& info)
 {
 	// Called with gLock held, for a device whose last user is going away.
 	// The engine goes first: it holds mappings in the page tables below it.
+	delete info.render_engine;
+	info.render_engine = NULL;
 	delete info.engine;
 	info.engine = NULL;
 	delete info.gtt;

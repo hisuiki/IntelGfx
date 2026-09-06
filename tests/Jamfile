@@ -2,6 +2,7 @@ SubDir HAIKU_TOP intel_gfx tests ;
 SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx headers ] ;
 SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx kernel ] ;
 UsePrivateHeaders graphics ;
+UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateKernelHeaders ;
 KernelAddon intel_gfx_memory_test :
 	memory_driver.cpp RenderClient.cpp BufferObject.cpp

@@ -1,0 +1,14 @@
+SubDir HAIKU_TOP intel_gfx demo ;
+UseBuildFeatureHeaders glu ;
+UseBuildFeatureHeaders mesa ;
+
+Includes [ FGristFiles GpuCube.cpp ] :
+	[ BuildFeatureAttribute glu : headers ]
+	[ BuildFeatureAttribute mesa : headers ] ;
+
+Application intel_gfx_cube :
+	GpuCube.cpp
+	: be $(TARGET_LIBSTDC++)
+	[ BuildFeatureAttribute glu : library ]
+	[ BuildFeatureAttribute mesa : library ]
+;

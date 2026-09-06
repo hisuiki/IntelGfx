@@ -17,7 +17,7 @@ public:
 	// The GTT belongs to the device and is shared by all of its clients; it
 	// may be NULL on hardware this driver has no address space for.
 	RenderClient(intel_info* device, const DeviceInfo& info, GlobalGTT* gtt,
-		RenderEngine* engine);
+		RenderEngine* blitter, RenderEngine* render);
 	~RenderClient();
 	intel_info* Device() const { return fDevice; }
 	status_t Ioctl(uint32 operation, void* userBuffer, size_t length);
@@ -27,7 +27,8 @@ private:
 	intel_info* fDevice;
 	DeviceInfo fInfo;
 	GlobalGTT* fGTT;
-	RenderEngine* fEngine;
+	RenderEngine* fEngines[2];
+	RenderEngine* _Engine(uint32 flags) const;
 	mutex fLock;
 	BufferObject* fBuffers[kMaxBuffers];
 	uint32 fHandles[kMaxBuffers];

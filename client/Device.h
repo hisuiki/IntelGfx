@@ -21,9 +21,9 @@ public:
 	status_t Unbind(uint32 handle) const;
 	// Runs the commands in a bound buffer and returns the fence they end on.
 	status_t Submit(uint32 handle, uint64 offset, uint64 length,
-		uint64& fence) const;
+		uint64& fence, uint32 flags = 0) const;
 	status_t Wait(uint64 fence, bigtime_t timeout) const;
-	status_t Status(EngineStatus& status) const;
+	status_t Status(EngineStatus& status, uint32 flags = 0) const;
 	status_t Read(uint32 offset, uint32& value) const;
 	status_t GetFramebuffer(Framebuffer& framebuffer) const;
 	status_t GetDisplayStatus(DisplayStatus& status) const;

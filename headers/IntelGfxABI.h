@@ -7,7 +7,7 @@
 
 namespace IntelGfx {
 
-static const uint32_t kABIVersion = 4;
+static const uint32_t kABIVersion = 5;
 static const uint64_t kMaxBufferSize = 64ULL * 1024 * 1024;
 static const uint64_t kClientMemoryLimit = 256ULL * 1024 * 1024;
 // Global GTT space is a scarce device resource shared with the display, so a
@@ -30,6 +30,12 @@ enum Operation {
 	// Keep last: the driver routes everything below this to the new
 	// interface, so adding an operation above needs no change there.
 	kOperationsEnd
+};
+
+// Flags for a submission. Commands that draw need the render engine; simple
+// memory work is better left on the blitter, which nothing else is using.
+enum SubmitFlags {
+	kUseRenderEngine = 1 << 0
 };
 
 enum Capability {

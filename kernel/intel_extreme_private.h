@@ -54,6 +54,7 @@ struct intel_info {
 	// client of it.
 	IntelGfx::GlobalGTT* gtt;
 	IntelGfx::RenderEngine* engine;
+	IntelGfx::RenderEngine* render_engine;
 };
 
 

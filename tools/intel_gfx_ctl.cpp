@@ -270,7 +270,7 @@ static void PrintEngineStatus(const EngineStatus& status)
 // Runs a batch on the GPU that stores a known value into another buffer, and
 // checks that the value arrived. This is the whole path: page tables, the
 // context, the ring, the execution list port and the fence.
-static status_t SubmitTest(Device& device)
+static status_t SubmitTest(Device& device, bool render)
 {
 	DeviceInfo info;
 	status_t status = device.GetInfo(info);
@@ -304,11 +304,13 @@ static status_t SubmitTest(Device& device)
 	commands[4] = kMiBatchBufferEnd;
 
 	uint64 fence = 0;
-	status = device.Submit(batch.Handle(), 0, 5 * sizeof(uint32), fence);
+	status = device.Submit(batch.Handle(), 0, 5 * sizeof(uint32), fence,
+		render ? kUseRenderEngine : 0);
 	if (status != B_OK)
 		return status;
-	printf("Submitted; fence %" B_PRIu64 " at graphics address 0x%" B_PRIx64
-		"\n", fence, batch.GraphicsAddress());
+	printf("Submitted to the %s engine; fence %" B_PRIu64 " at graphics "
+		"address 0x%" B_PRIx64 "\n", render ? "render" : "blitter", fence,
+		batch.GraphicsAddress());
 
 	status = device.Wait(fence, 2000000);
 	if (status != B_OK) {
@@ -623,7 +625,7 @@ int main(int argc, char** argv)
 			else if ((status = serviceStatus) == B_OK)
 				status = PrintDevices(reply);
 		}
-	} else if (argc == 3 && (strcmp(argv[1], "info") == 0
+	} else if (argc >= 3 && (strcmp(argv[1], "info") == 0
 		|| strcmp(argv[1], "buffer-test") == 0
 		|| strcmp(argv[1], "gtt-test") == 0
 		|| strcmp(argv[1], "submit-test") == 0
@@ -640,7 +642,8 @@ int main(int argc, char** argv)
 			else if (strcmp(argv[1], "gtt-test") == 0)
 				status = GttTest(device, argv[2]);
 			else if (strcmp(argv[1], "submit-test") == 0)
-				status = SubmitTest(device);
+				status = SubmitTest(device, argc > 3
+					&& strcmp(argv[3], "render") == 0);
 			else if (strcmp(argv[1], "displays") == 0)
 				status = Displays(device);
 			else if (strcmp(argv[1], "fill-test") == 0)
@@ -651,7 +654,8 @@ int main(int argc, char** argv)
 				status = Vblank(device);
 			else if (strcmp(argv[1], "engine-status") == 0) {
 				EngineStatus engine;
-				status = device.Status(engine);
+				status = device.Status(engine, argc > 3
+					&& strcmp(argv[3], "render") == 0 ? kUseRenderEngine : 0);
 				if (status == B_OK)
 					PrintEngineStatus(engine);
 			}
@@ -665,7 +669,7 @@ int main(int argc, char** argv)
 	} else {
 		fprintf(stderr, "Usage: %s list | service-info | info DEVICE"
 			" | buffer-test DEVICE | gtt-test DEVICE"
-			" | submit-test DEVICE | engine-status DEVICE"
+			" | submit-test DEVICE [render] | engine-status DEVICE [render]"
 			" | displays DEVICE | fill-test DEVICE | vblank DEVICE"
 			" | brightness [0..1]\n", argv[0]);
 		return 2;
