@@ -7,7 +7,9 @@
 #include <Application.h>
 #include <Message.h>
 #include <Messenger.h>
+#include <Notification.h>
 #include <Screen.h>
+#include <String.h>
 #include <new>
 #include <errno.h>
 #include <stdio.h>
@@ -582,6 +584,18 @@ static status_t Brightness(const char* value)
 	if (status != B_OK)
 		return status;
 	printf("Backlight at %d%%\n", (int)(current * 100.0f + 0.5f));
+
+	// The same indicator the brightness keys raise, so it can be seen on a
+	// keyboard whose keys never reach the system.
+	BNotification notification(B_PROGRESS_NOTIFICATION);
+	notification.SetMessageID("intel_gfx_brightness");
+	notification.SetGroup("Screen");
+	notification.SetTitle("Brightness");
+	BString content;
+	content.SetToFormat("%d%%", (int)(current * 100.0f + 0.5f));
+	notification.SetContent(content);
+	notification.SetProgress(current);
+	notification.Send(1500000);
 	return B_OK;
 }
 

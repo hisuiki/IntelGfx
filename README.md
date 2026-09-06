@@ -185,6 +185,31 @@ of mistake that leaves the hardware looking healthy while doing nothing:
   exactly as many pages as the table holds fails with `B_BUFFER_OVERFLOW`,
   which is what binding anything larger than 31 pages used to do.
 
+## Panel brightness
+
+The backlight is controlled through the ordinary `BScreen` interface, so the
+slider in Screen preferences works and so does anything else that asks. That
+slider hides itself when the driver reports no brightness support, which is
+what a laptop looked like when the device table called its chip a desktop
+part; the driver now decides by asking the hardware whether a backlight
+modulation period is programmed.
+
+`intel_gfx_brightness_keys` is an input filter that turns the brightness keys
+of a keyboard into backlight changes and shows the level as a notification,
+which nothing in the system does on its own. It acts on the display
+brightness usages of the HID consumer page, and a keyboard that reports
+something else can be accommodated with `report_keys true` in
+`~/config/settings/kernel/drivers/intel_gfx_brightness_keys`, which writes
+every key it sees to the syslog, followed by `raise_key` and `lower_key`
+there.
+
+That covers keyboards whose brightness keys reach the system at all. A
+ThinkPad's do not: on a P50 the volume keys arrive as consumer page usages
+while the brightness keys produce nothing and change nothing, because the
+embedded controller reports them as ACPI events on the vendor's hotkey
+device, which Haiku has no driver for. Making those keys work needs that
+driver, not this filter.
+
 ## Test image
 
 `image.py` builds a bootable Haiku image with this driver already in place, for

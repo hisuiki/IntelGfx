@@ -34,7 +34,7 @@ def main():
                        'SubInclude HAIKU_TOP intel_gfx ;\n')
     command = ['jam', f'-sJAMFILE={wrapper}', '-sHAIKU_IGNORE_USER_BUILD_CONFIG=1',
                f'-j{args.jobs}', 'intel_gfx', 'intel_gfx.accelerant',
-               'IntelGfx', 'intel_gfx_ctl']
+               'IntelGfx', 'intel_gfx_ctl', 'intel_gfx_brightness_keys']
     if args.tests:
         command.append('intel_gfx_memory_test')
     print('Building IntelGfx (log: %s)' % (out / 'build.log'), flush=True)
@@ -60,6 +60,8 @@ def main():
         objects / 'display/intel_gfx.accelerant': 'add-ons/accelerants/intel_gfx.accelerant',
         objects / 'server/IntelGfx': 'servers/IntelGfx',
         objects / 'tools/intel_gfx_ctl': 'bin/intel_gfx_ctl',
+        objects / 'input/intel_gfx_brightness_keys':
+            'add-ons/input_server/filters/intel_gfx_brightness_keys',
         project / 'package/intel_gfx_activate': 'bin/intel_gfx_activate',
         project / 'README.md': 'documentation/packages/intel_gfx/README.md',
         project / 'UPSTREAM.json': 'documentation/packages/intel_gfx/UPSTREAM.json',

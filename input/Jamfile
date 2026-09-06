@@ -1,0 +1,6 @@
+SubDir HAIKU_TOP intel_gfx input ;
+UsePrivateHeaders interface ;
+Addon intel_gfx_brightness_keys :
+	BrightnessKeys.cpp
+	: be input_server $(TARGET_LIBSTDC++)
+;

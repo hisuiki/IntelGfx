@@ -2,5 +2,6 @@ SubDir HAIKU_TOP intel_gfx ;
 SubInclude HAIKU_TOP intel_gfx kernel ;
 SubInclude HAIKU_TOP intel_gfx display ;
 SubInclude HAIKU_TOP intel_gfx server ;
+SubInclude HAIKU_TOP intel_gfx input ;
 SubInclude HAIKU_TOP intel_gfx tools ;
 SubInclude HAIKU_TOP intel_gfx tests ;
