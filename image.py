@@ -161,6 +161,8 @@ def configure(build, stage, package, settings):
         'intel_gfx_activate': 'system non-packaged bin',
         'intel_gfx_cube': 'system non-packaged bin',
         'Intel Gallium': 'home config non-packaged add-ons opengl',
+        'libvulkan_intel.so': 'system non-packaged lib',
+        'intel_icd.x86_64.json': 'system non-packaged data vulkan icd.d',
         'IntelGfx': 'system non-packaged servers',
     }
     block = [BEGIN]
@@ -185,9 +187,15 @@ def write_image(image, device):
 
 def main():
     project = Path(__file__).resolve().parent
+    default_build = project.parent / 'generated.x86_64'
+    if not (default_build / 'build/BuildConfig').is_file():
+        if (project.parent / 'haiku/generated.x86_64/build/BuildConfig').is_file():
+            default_build = project.parent / 'haiku/generated.x86_64'
+        elif 'HAIKU_OUTPUT_DIR' in os.environ:
+            default_build = Path(os.environ['HAIKU_OUTPUT_DIR']).resolve()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--haiku-build', type=Path,
-                        default=project.parent / 'generated.x86_64')
+                        default=default_build)
     parser.add_argument('-j', '--jobs', type=int, default=4)
     parser.add_argument('--write', metavar='DEVICE',
                         help='erase this block device and write the image to it')
@@ -227,6 +235,8 @@ def main():
             objects / 'tools/intel_gfx_ctl': 'intel_gfx_ctl',
             objects / 'demo/intel_gfx_cube': 'intel_gfx_cube',
             project / 'out/mesa/Intel Gallium': 'Intel Gallium',
+            project / 'out/mesa/libvulkan_intel.so': 'libvulkan_intel.so',
+            project / 'out/mesa/intel_icd.x86_64.json': 'intel_icd.x86_64.json',
             project / 'package/intel_gfx_activate': 'intel_gfx_activate',
         }
         for source, name in staged.items():

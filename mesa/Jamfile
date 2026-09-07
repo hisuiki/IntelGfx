@@ -1,0 +1,35 @@
+SubDir HAIKU_TOP intel_gfx mesa ;
+
+local outDir = [ FDirName $(HAIKU_TOP) intel_gfx out ] ;
+local mesaDir = [ FDirName $(outDir) mesa ] ;
+local irisTarget = [ FDirName $(mesaDir) "Intel Gallium" ] ;
+local vkTarget = [ FDirName $(mesaDir) "libvulkan_intel.so" ] ;
+local icdTarget = [ FDirName $(mesaDir) "intel_icd.x86_64.json" ] ;
+
+local mesaScript = [ FDirName $(HAIKU_TOP) intel_gfx mesa build.py ] ;
+local mesaSources =
+	$(mesaScript)
+	[ FDirName $(HAIKU_TOP) intel_gfx mesa mesa-22.0.5-haiku-iris.patch ]
+	[ FDirName $(HAIKU_TOP) intel_gfx mesa overlay compat IntelWinsys.cpp ]
+	[ FDirName $(HAIKU_TOP) intel_gfx mesa overlay compat xf86drm.h ]
+	[ FDirName $(HAIKU_TOP) intel_gfx mesa overlay compat intel_haiku.h ]
+	[ FDirName $(HAIKU_TOP) intel_gfx mesa overlay wsi wsi_common_haiku.c ]
+	[ FDirName $(HAIKU_TOP) intel_gfx headers IntelGfxABI.h ]
+;
+
+rule BuildIntelMesa
+{
+	Depends $(1) : $(2) ;
+}
+
+actions BuildIntelMesa
+{
+	python3 "$(2[1])" --haiku-build "$(HAIKU_OUTPUT_DIR)" -j4
+}
+
+BuildIntelMesa $(irisTarget) : $(mesaSources) ;
+Depends $(vkTarget) : $(irisTarget) ;
+Depends $(icdTarget) : $(irisTarget) ;
+
+NotFile intel_gfx_mesa ;
+Depends intel_gfx_mesa : $(irisTarget) $(vkTarget) $(icdTarget) ;

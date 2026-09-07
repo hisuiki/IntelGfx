@@ -33,9 +33,35 @@
  
  #endif
  
+--- a/include/vulkan/vulkan.h
++++ b/include/vulkan/vulkan.h
+@@ -38,7 +38,12 @@
+ 
+ 
+ #ifdef VK_USE_PLATFORM_WAYLAND_KHR
++#ifdef __HAIKU__
++struct wl_display;
++struct wl_surface;
++#else
+ #include <wayland-client.h>
++#endif
+ #include "vulkan_wayland.h"
+ #endif
+ 
 --- a/meson.build
 +++ b/meson.build
-@@ -997,7 +997,7 @@
+@@ -436,6 +436,10 @@
+   c_args += '-DVK_ENABLE_BETA_EXTENSIONS'
+   cpp_args += '-DVK_ENABLE_BETA_EXTENSIONS'
+ endif
++if with_platform_haiku
++  c_args += ['-DVK_USE_PLATFORM_HAIKU', '-DVK_USE_PLATFORM_WAYLAND_KHR']
++  cpp_args += ['-DVK_USE_PLATFORM_HAIKU', '-DVK_USE_PLATFORM_WAYLAND_KHR']
++endif
+ 
+ _egl = get_option('egl')
+ if _egl == 'true'
+@@ -997,7 +1001,7 @@
  has_mako = run_command(
    prog_python, '-c',
    '''
@@ -44,11 +70,20 @@
  import mako
  assert StrictVersion(mako.__version__) > StrictVersion("0.8.0")
    ''', check: false)
-@@ -1610,6 +1610,9 @@
+@@ -1480,7 +1484,7 @@
+ 
+ if cc.has_function('dl_iterate_phdr')
+   pre_args += '-DHAVE_DL_ITERATE_PHDR'
+-elif with_intel_vk
++elif with_intel_vk and not with_platform_haiku
+   error('Intel "Anvil" Vulkan driver requires the dl_iterate_phdr function')
+ endif
+ 
+@@ -1610,6 +1614,9 @@
    # GNU/Hurd includes egl_dri2, without drm.
    required : (with_dri2 and host_machine.system() != 'gnu') or with_dri3
  )
-+if with_platform_haiku and with_gallium_iris
++if with_platform_haiku and (with_gallium_iris or with_intel_vk)
 +  dep_libdrm = declare_dependency(include_directories : include_directories('src/intel/haiku/compat'))
 +endif
  if dep_libdrm.found()
@@ -412,3 +447,300 @@
  }
  
  static bool
+--- a/src/intel/vulkan/anv_device.c
++++ b/src/intel/vulkan/anv_device.c
+@@ -120,7 +120,8 @@
+ #if defined(VK_USE_PLATFORM_WAYLAND_KHR) || \
+     defined(VK_USE_PLATFORM_XCB_KHR) || \
+     defined(VK_USE_PLATFORM_XLIB_KHR) || \
+-    defined(VK_USE_PLATFORM_DISPLAY_KHR)
++    defined(VK_USE_PLATFORM_DISPLAY_KHR) || \
++    defined(VK_USE_PLATFORM_HAIKU)
+ #define ANV_USE_WSI_PLATFORM
+ #endif
+ 
+@@ -149,6 +150,7 @@
+    .KHR_get_surface_capabilities2            = true,
+    .KHR_surface                              = true,
+    .KHR_surface_protected_capabilities       = true,
++   .EXT_headless_surface                     = true,
+ #endif
+ #ifdef VK_USE_PLATFORM_WAYLAND_KHR
+    .KHR_wayland_surface                      = true,
+--- a/src/intel/vulkan/meson.build
++++ b/src/intel/vulkan/meson.build
+@@ -149,6 +149,10 @@
+   libanv_files += files('anv_android_stubs.c')
+ endif
+ 
++if with_platform_haiku
++  libanv_files += files('../haiku/compat/IntelWinsys.cpp')
++endif
++
+ anv_deps += idep_intel_driver_ds_headers
+ 
+ libanv_common = static_library(
+--- a/src/util/build_id.c
++++ b/src/util/build_id.c
+@@ -131,6 +131,44 @@
+ build_id_data(const struct build_id_note *note)
+ {
+    return note->build_id;
++#else
++
++#include <stddef.h>
++#include <stdint.h>
++#include "build_id.h"
++
++struct build_id_note {
++   uint32_t namesz;
++   uint32_t descsz;
++   uint32_t type;
++   char name[4];
++   uint8_t build_id[20];
++};
++
++static const struct build_id_note haiku_build_id = {
++   .namesz = 4,
++   .descsz = 20,
++   .type = 3,
++   .name = "GNU",
++   .build_id = { 0x48, 0x61, 0x69, 0x6b, 0x75, 0x49, 0x6e, 0x74, 0x65, 0x6c, 0x47, 0x66, 0x78, 0x56, 0x6b, 0x61, 0x6e, 0x01, 0x02, 0x03 }
++};
++
++const struct build_id_note *
++build_id_find_nhdr_for_addr(const void *addr)
++{
++   return &haiku_build_id;
++}
++
++unsigned
++build_id_length(const struct build_id_note *note)
++{
++   return note ? note->descsz : 0;
++}
++
++const uint8_t *
++build_id_data(const struct build_id_note *note)
++{
++   return note ? note->build_id : NULL;
+ }
+ 
+ #endif
+--- a/src/util/build_id.h
++++ b/src/util/build_id.h
+@@ -28,8 +28,6 @@
+ extern "C" {
+ #endif
+ 
+-#ifdef HAVE_DL_ITERATE_PHDR
+-
+ #include <stdint.h>
+ 
+ struct build_id_note;
+@@ -43,8 +41,6 @@
+ const uint8_t *
+ build_id_data(const struct build_id_note *note);
+ 
+-#endif
+-
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/src/util/futex.h
++++ b/src/util/futex.h
+@@ -115,6 +115,42 @@
+ 
+ #else
+ #define UTIL_FUTEX_SUPPORTED 0
++
++#if defined(__HAIKU__)
++#include <OS.h>
++#include <sched.h>
++#include <time.h>
++
++static inline int futex_wake(uint32_t *addr, int count)
++{
++   (void)addr;
++   (void)count;
++   return 0;
++}
++
++static inline int futex_wait(uint32_t *addr, int32_t value, const struct timespec *timeout)
++{
++   (void)timeout;
++   if (__atomic_load_n((int32_t *)addr, __ATOMIC_ACQUIRE) != value)
++      return 0;
++   snooze(50);
++   return 0;
++}
++#else
++#include <assert.h>
++static inline int futex_wake(uint32_t *addr, int count)
++{
++   assert(!"futex not supported on this platform");
++   return -1;
++}
++
++static inline int futex_wait(uint32_t *addr, int32_t value, const struct timespec *timeout)
++{
++   assert(!"futex not supported on this platform");
++   return -1;
++}
++#endif
++
+ #endif
+ 
+ #endif /* UTIL_FUTEX_H */
+--- a/src/util/simple_mtx.h
++++ b/src/util/simple_mtx.h
+@@ -29,7 +29,77 @@
+ 
+ #include "c11/threads.h"
+ 
+-#if UTIL_FUTEX_SUPPORTED
++#if defined(__HAIKU__)
++
++/* Mesa requires that a simple_mtx_t which has only been zeroed is usable:
++ * structures embedding one are routinely allocated with calloc and never
++ * initialised, iris_resource::valid_buffer_range among them, and that is
++ * correct against the futex implementation below, where a value of zero means
++ * unlocked. Haiku has no futex, and the mtx_t fallback at the end of this file
++ * is a pthread mutex, which is not valid when it has merely been zeroed: the
++ * first lock of one trips an assertion on its owner field. Build the lock on
++ * Haiku's own user mutex instead, which is the primitive its pthread mutex is
++ * itself built on and which does treat zero as unlocked.
++ */
++
++#define B_USER_MUTEX_LOCKED		0x01
++#define B_USER_MUTEX_WAITING	0x02
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++extern int32_t _kern_mutex_lock(int32_t *mutex, const char *name,
++   uint32_t flags, int64_t timeout);
++extern int32_t _kern_mutex_unblock(int32_t *mutex, uint32_t flags);
++#ifdef __cplusplus
++}
++#endif
++
++typedef struct {
++   uint32_t val;
++} simple_mtx_t;
++
++#define _SIMPLE_MTX_INITIALIZER_NP { 0 }
++
++static inline void
++simple_mtx_init(simple_mtx_t *mtx, ASSERTED int type)
++{
++   assert(type == mtx_plain);
++   mtx->val = 0;
++}
++
++static inline void
++simple_mtx_destroy(ASSERTED simple_mtx_t *mtx)
++{
++}
++
++static inline void
++simple_mtx_lock(simple_mtx_t *mtx)
++{
++   uint32_t expected = 0;
++   if (__builtin_expect(!__atomic_compare_exchange_n(&mtx->val, &expected,
++         B_USER_MUTEX_LOCKED, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED), 0)) {
++      _kern_mutex_lock((int32_t *)&mtx->val, "simple_mtx", 0,
++         0x7fffffffffffffffLL);
++   }
++}
++
++static inline void
++simple_mtx_unlock(simple_mtx_t *mtx)
++{
++   uint32_t old = __atomic_fetch_and(&mtx->val,
++      ~(uint32_t)B_USER_MUTEX_LOCKED, __ATOMIC_RELEASE);
++   if (__builtin_expect((old & B_USER_MUTEX_WAITING) != 0, 0))
++      _kern_mutex_unblock((int32_t *)&mtx->val, 0);
++}
++
++static inline void
++simple_mtx_assert_locked(simple_mtx_t *mtx)
++{
++   assert(mtx->val & B_USER_MUTEX_LOCKED);
++}
++
++#elif UTIL_FUTEX_SUPPORTED
+ 
+ #if defined(HAVE_VALGRIND) && !defined(NDEBUG)
+ #  include <valgrind.h>
+--- a/src/vulkan/wsi/meson.build
++++ b/src/vulkan/wsi/meson.build
+@@ -40,6 +40,10 @@
+   files_vulkan_wsi += files('wsi_common_win32.c')
+ endif
+ 
++if with_platform_haiku
++  files_vulkan_wsi += files('wsi_common_haiku.c')
++endif
++
+ if system_has_kms_drm and not with_platform_android
+   files_vulkan_wsi += files('wsi_common_display.c')
+ endif
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -121,7 +121,7 @@
+       goto fail;
+ #endif
+ 
+-#ifdef VK_USE_PLATFORM_WAYLAND_KHR
++#if defined(VK_USE_PLATFORM_WAYLAND_KHR) && !defined(VK_USE_PLATFORM_HAIKU)
+    result = wsi_wl_init_wsi(wsi, alloc, pdevice);
+    if (result != VK_SUCCESS)
+       goto fail;
+@@ -139,6 +139,12 @@
+       goto fail;
+ #endif
+ 
++#ifdef VK_USE_PLATFORM_HAIKU
++   result = wsi_haiku_init_wsi(wsi, alloc, pdevice);
++   if (result != VK_SUCCESS)
++      goto fail;
++#endif
++
+    present_mode = getenv("MESA_VK_WSI_PRESENT_MODE");
+    if (present_mode) {
+       if (!strcmp(present_mode, "fifo")) {
+@@ -183,7 +189,7 @@
+ #ifdef VK_USE_PLATFORM_DISPLAY_KHR
+    wsi_display_finish_wsi(wsi, alloc);
+ #endif
+-#ifdef VK_USE_PLATFORM_WAYLAND_KHR
++#if defined(VK_USE_PLATFORM_WAYLAND_KHR) && !defined(VK_USE_PLATFORM_HAIKU)
+    wsi_wl_finish_wsi(wsi, alloc);
+ #endif
+ #ifdef VK_USE_PLATFORM_WIN32_KHR
+@@ -192,6 +198,9 @@
+ #ifdef VK_USE_PLATFORM_XCB_KHR
+    wsi_x11_finish_wsi(wsi, alloc);
+ #endif
++#ifdef VK_USE_PLATFORM_HAIKU
++   wsi_haiku_finish_wsi(wsi, alloc);
++#endif
+ }
+ 
+ VKAPI_ATTR void VKAPI_CALL
+--- a/src/vulkan/wsi/wsi_common_private.h
++++ b/src/vulkan/wsi/wsi_common_private.h
+@@ -213,6 +213,12 @@
+ void wsi_win32_finish_wsi(struct wsi_device *wsi_device,
+                        const VkAllocationCallbacks *alloc);
+ 
++VkResult wsi_haiku_init_wsi(struct wsi_device *wsi_device,
++                          const VkAllocationCallbacks *alloc,
++                          VkPhysicalDevice physical_device);
++void wsi_haiku_finish_wsi(struct wsi_device *wsi_device,
++                        const VkAllocationCallbacks *alloc);
++
+ 
+ VkResult
+ wsi_display_init_wsi(struct wsi_device *wsi_device,

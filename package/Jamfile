@@ -1,0 +1,108 @@
+SubDir HAIKU_TOP intel_gfx package ;
+
+local outDir = [ FDirName $(HAIKU_TOP) intel_gfx out ] ;
+local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.2.0-1-x86_64.hpkg" ] ;
+
+local mesaDir = [ FDirName $(outDir) mesa ] ;
+local irisTarget = [ FDirName $(mesaDir) "Intel Gallium" ] ;
+local vkTarget = [ FDirName $(mesaDir) "libvulkan_intel.so" ] ;
+local icdTarget = [ FDirName $(mesaDir) "intel_icd.x86_64.json" ] ;
+
+local packageInfo = [ FDirName $(HAIKU_TOP) intel_gfx package PackageInfo ] ;
+local activateScript = [ FDirName $(HAIKU_TOP) intel_gfx package intel_gfx_activate ] ;
+local readme = [ FDirName $(HAIKU_TOP) intel_gfx README.md ] ;
+local upstream = [ FDirName $(HAIKU_TOP) intel_gfx UPSTREAM.json ] ;
+local license = [ FDirName $(HAIKU_TOP) intel_gfx License.md ] ;
+
+local objectsDir = [ FDirName $(HAIKU_OUTPUT_DIR) objects haiku $(TARGET_ARCH) release ] ;
+local kernelDriver = [ FDirName $(objectsDir) kernel intel_gfx ] ;
+local accelerant = [ FDirName $(objectsDir) display intel_gfx.accelerant ] ;
+local server = [ FDirName $(objectsDir) server IntelGfx ] ;
+local ctl = [ FDirName $(objectsDir) tools intel_gfx_ctl ] ;
+local brightnessKeys = [ FDirName $(objectsDir) input intel_gfx_brightness_keys ] ;
+local cube = [ FDirName $(objectsDir) demo intel_gfx_cube ] ;
+local monitor = [ FDirName $(objectsDir) monitor intel_gfx_monitor ] ;
+
+local packageTool = [ FDirName $(HAIKU_OUTPUT_DIR) objects linux $(HOST_ARCH) release tools package package ] ;
+local packageLibDir = [ FDirName $(HAIKU_OUTPUT_DIR) objects linux lib ] ;
+
+rule BuildIntelGfxPackage
+{
+	Depends $(1) : $(2) ;
+}
+
+actions BuildIntelGfxPackage
+{
+	STAGE="$(1:D)/stage"
+	rm -rf "$STAGE"
+	mkdir -p "$STAGE"
+	mkdir -p "$STAGE/data/intel_gfx/kernel"
+	mkdir -p "$STAGE/add-ons/accelerants"
+	mkdir -p "$STAGE/servers"
+	mkdir -p "$STAGE/bin"
+	mkdir -p "$STAGE/add-ons/input_server/filters"
+	mkdir -p "$STAGE/documentation/packages/intel_gfx"
+	mkdir -p "$STAGE/data/licenses"
+	mkdir -p "$STAGE/data/intel_gfx/opengl"
+	mkdir -p "$STAGE/lib"
+	mkdir -p "$STAGE/data/vulkan/icd.d"
+	mkdir -p "$STAGE/data/intel_gfx/vulkan"
+
+	cp -f "$(2[1])" "$STAGE/data/intel_gfx/kernel/intel_gfx"
+	cp -f "$(2[2])" "$STAGE/add-ons/accelerants/intel_gfx.accelerant"
+	cp -f "$(2[3])" "$STAGE/servers/IntelGfx"
+	cp -f "$(2[4])" "$STAGE/bin/intel_gfx_ctl"
+	cp -f "$(2[5])" "$STAGE/add-ons/input_server/filters/intel_gfx_brightness_keys"
+	cp -f "$(2[6])" "$STAGE/bin/intel_gfx_cube"
+	cp -f "$(2[7])" "$STAGE/bin/intel_gfx_monitor"
+	cp -f "$(2[8])" "$STAGE/bin/intel_gfx_activate"
+	chmod 755 "$STAGE/bin/intel_gfx_activate"
+	cp -f "$(2[9])" "$STAGE/documentation/packages/intel_gfx/README.md"
+	cp -f "$(2[10])" "$STAGE/documentation/packages/intel_gfx/UPSTREAM.json"
+	cp -f "$(2[11])" "$STAGE/data/licenses/IntelGfx"
+	cp -f "$(2[12])" "$STAGE/data/intel_gfx/opengl/Intel Gallium"
+	cp -f "$(2[13])" "$STAGE/lib/libvulkan_intel.so"
+	cp -f "$(2[13])" "$STAGE/data/intel_gfx/vulkan/libvulkan_intel.so"
+	cp -f "$(2[14])" "$STAGE/data/vulkan/icd.d/intel_icd.x86_64.json"
+	cp -f "$(2[14])" "$STAGE/data/intel_gfx/vulkan/intel_icd.x86_64.json"
+	cp -f "$(2[15])" "$STAGE/.PackageInfo"
+
+	PKG_TOOL="$(2[16])"
+	if [ ! -f "$PKG_TOOL" ]; then
+		PKG_TOOL="/boot/system/bin/package"
+	fi
+	LD_LIBRARY_PATH="$(2[17]):$LD_LIBRARY_PATH" "$PKG_TOOL" create -C "$STAGE" "$(1)"
+	echo "Created $(1)"
+}
+
+BuildIntelGfxPackage $(hpkgTarget) :
+	$(kernelDriver)
+	$(accelerant)
+	$(server)
+	$(ctl)
+	$(brightnessKeys)
+	$(cube)
+	$(monitor)
+	$(activateScript)
+	$(readme)
+	$(upstream)
+	$(license)
+	$(irisTarget)
+	$(vkTarget)
+	$(icdTarget)
+	$(packageInfo)
+	$(packageTool)
+	$(packageLibDir)
+;
+
+Depends $(kernelDriver) : intel_gfx ;
+Depends $(accelerant) : intel_gfx.accelerant ;
+Depends $(server) : IntelGfx ;
+Depends $(ctl) : intel_gfx_ctl ;
+Depends $(brightnessKeys) : intel_gfx_brightness_keys ;
+Depends $(cube) : intel_gfx_cube ;
+Depends $(monitor) : intel_gfx_monitor ;
+Depends $(hpkgTarget) : intel_gfx_mesa ;
+
+NotFile intel_gfx_package ;
+Depends intel_gfx_package : $(hpkgTarget) ;

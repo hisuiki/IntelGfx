@@ -1,8 +1,8 @@
 name intel_gfx
 version 0.2.0-1
 architecture x86_64
-summary "Experimental Intel display and Iris OpenGL graphics driver"
-description "IntelGfx display driver, isolated GPU contexts, native command submission, Mesa Iris OpenGL renderer, device service and diagnostics. Driver activation is explicit."
+summary "Experimental Intel display, Iris OpenGL, and Vulkan ANV graphics driver"
+description "IntelGfx display driver, isolated GPU contexts, native command submission, Mesa Iris OpenGL renderer, Intel Vulkan ANV driver with Haiku WSI, device service and diagnostics. Driver activation is explicit."
 packager "IntelGfx contributors"
 vendor "IntelGfx contributors"
 copyrights {
@@ -13,6 +13,7 @@ licenses { "IntelGfx" }
 provides {
 	intel_gfx = 0.2.0
 	mesa_iris = 22.0.5
+	mesa_vulkan_intel = 22.0.5
 	cmd:intel_gfx_ctl = 0.2.0
 	cmd:intel_gfx_activate = 0.2.0
 }

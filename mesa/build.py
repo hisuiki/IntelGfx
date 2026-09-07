@@ -80,6 +80,8 @@ def main() -> int:
                  source / "src/intel/haiku/compat/IntelGfxABI.h")
     shutil.copy2(here / "overlay/compat/intel_haiku.h",
                  source / "src/intel/common/intel_haiku.h")
+    shutil.copy2(here / "overlay/wsi/wsi_common_haiku.c",
+                 source / "src/vulkan/wsi/wsi_common_haiku.c")
 
     regular = (build / "objects/haiku/x86_64/packaging/packages_build/regular")
     devel = regular / "hpkg_-haiku_devel.hpkg/contents"
@@ -148,7 +150,7 @@ def main() -> int:
     environment["PATH"] = str(python.parent) + ":" + environment["PATH"]
     environment["PKG_CONFIG_LIBDIR"] = str(pkgconfig)
     options = [
-        "-Dplatforms=haiku", "-Dgallium-drivers=iris", "-Dvulkan-drivers=",
+        "-Dplatforms=haiku", "-Dgallium-drivers=iris", "-Dvulkan-drivers=intel",
         "-Ddri-drivers=", "-Dllvm=disabled", "-Dshared-llvm=disabled",
         "-Dglx=disabled", "-Degl=disabled", "-Dgles1=disabled",
         "-Dgles2=disabled", "-Dgbm=disabled", "-Dlibunwind=disabled",
@@ -161,16 +163,23 @@ def main() -> int:
     else:
         run([meson, "setup", "--reconfigure", mesa_build, source],
             env=environment)
-    target = "src/gallium/targets/haiku-iris/libhaiku-iris.so"
-    run(["ninja", "-C", mesa_build, f"-j{args.jobs}", target], env=environment)
-    install = out / "install"
-    if install.is_dir():
-        shutil.rmtree(install)
-    run([meson, "install", "-C", mesa_build, "--no-rebuild", "--strip",
-         "--tags", "haiku-iris", "--destdir", install], env=environment)
+    targets = [
+        "src/gallium/targets/haiku-iris/libhaiku-iris.so",
+        "src/intel/vulkan/libvulkan_intel.so",
+        "src/intel/vulkan/intel_icd.x86_64.json",
+    ]
+    run(["ninja", "-C", mesa_build, f"-j{args.jobs}"] + targets, env=environment)
+    strip_tool = f"{toolchain}strip"
     result = out / "Intel Gallium"
-    shutil.copy2(install / "usr/local/lib/libhaiku-iris.so", result)
-    print(result)
+    shutil.copy2(mesa_build / "src/gallium/targets/haiku-iris/libhaiku-iris.so", result)
+    run([strip_tool, str(result)])
+    vk_result = out / "libvulkan_intel.so"
+    shutil.copy2(mesa_build / "src/intel/vulkan/libvulkan_intel.so", vk_result)
+    run([strip_tool, str(vk_result)])
+    icd_result = out / "intel_icd.x86_64.json"
+    icd_json = '{\n    "ICD": {\n        "api_version": "1.3.204",\n        "library_path": "libvulkan_intel.so"\n    },\n    "file_format_version": "1.0.0"\n}\n'
+    icd_result.write_text(icd_json)
+    print(f"Built:\n  {result}\n  {vk_result}\n  {icd_result}")
     return 0
 
 

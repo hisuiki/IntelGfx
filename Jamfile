@@ -1,4 +1,5 @@
 SubDir HAIKU_TOP intel_gfx ;
+
 SubInclude HAIKU_TOP intel_gfx kernel ;
 SubInclude HAIKU_TOP intel_gfx display ;
 SubInclude HAIKU_TOP intel_gfx server ;
@@ -7,3 +8,40 @@ SubInclude HAIKU_TOP intel_gfx monitor ;
 SubInclude HAIKU_TOP intel_gfx input ;
 SubInclude HAIKU_TOP intel_gfx tools ;
 SubInclude HAIKU_TOP intel_gfx tests ;
+SubInclude HAIKU_TOP intel_gfx mesa ;
+SubInclude HAIKU_TOP intel_gfx package ;
+
+# Top-level meta target for core driver binaries
+NotFile intel_gfx_binaries ;
+Depends intel_gfx_binaries :
+	intel_gfx
+	intel_gfx.accelerant
+	IntelGfx
+	intel_gfx_ctl
+	intel_gfx_brightness_keys
+	intel_gfx_cube
+	intel_gfx_monitor
+;
+
+# AnyBoot Image target
+rule BuildIntelGfxImage
+{
+	Depends $(1) : $(2) ;
+}
+
+actions BuildIntelGfxImage
+{
+	python3 [ FDirName $(HAIKU_TOP) intel_gfx image.py ] --haiku-build "$(HAIKU_OUTPUT_DIR)" -j4
+}
+
+NotFile intel_gfx_image ;
+BuildIntelGfxImage intel_gfx_image : intel_gfx_package ;
+
+# Top-level meta target for all IntelGfx targets
+NotFile intel_gfx_all ;
+Depends intel_gfx_all :
+	intel_gfx_binaries
+	intel_gfx_mesa
+	intel_gfx_package
+	intel_gfx_memory_test
+;

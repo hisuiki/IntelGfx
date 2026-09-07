@@ -17,6 +17,12 @@ target=/boot/system/data/intel_gfx/kernel/intel_gfx
 renderer_base=$(finddir B_USER_NONPACKAGED_ADDONS_DIRECTORY)/opengl
 renderer=$renderer_base/Intel\ Gallium
 renderer_target=/boot/system/data/intel_gfx/opengl/Intel\ Gallium
+vulkan_icd_base=$(finddir B_USER_NONPACKAGED_DATA_DIRECTORY)/vulkan/icd.d
+vulkan_icd=$vulkan_icd_base/intel_icd.x86_64.json
+vulkan_icd_target=/boot/system/data/intel_gfx/vulkan/intel_icd.x86_64.json
+vulkan_lib_base=$(finddir B_USER_NONPACKAGED_LIB_DIRECTORY)
+vulkan_lib=$vulkan_lib_base/libvulkan_intel.so
+vulkan_lib_target=/boot/system/data/intel_gfx/vulkan/libvulkan_intel.so
 
 owned_link()
 {
@@ -34,6 +40,11 @@ case "${1:-status}" in
 			echo "Intel Iris OpenGL is selected for new applications."
 		else
 			echo "Intel Iris OpenGL is not selected by this tool."
+		fi
+		if owned_link "$vulkan_icd" "$vulkan_icd_target"; then
+			echo "Intel Vulkan (ANV) is selected for Vulkan applications."
+		else
+			echo "Intel Vulkan (ANV) is not selected by this tool."
 		fi
 		echo "Use intel_gfx_ctl list to inspect the currently loaded driver."
 		;;
@@ -58,15 +69,24 @@ case "${1:-status}" in
 		owned_link "$binary" "$target" || ln -s "$target" "$binary"
 		owned_link "$device" ../../bin/intel_extreme || ln -s ../../bin/intel_extreme "$device"
 		owned_link "$renderer" "$renderer_target" || ln -s "$renderer_target" "$renderer"
-		echo "IntelGfx and Intel Iris OpenGL selected. Reboot to load the kernel driver."
+		if [ -f "$vulkan_icd_target" ]; then
+			mkdir -p "$vulkan_icd_base" "$vulkan_lib_base"
+			owned_link "$vulkan_icd" "$vulkan_icd_target" || ln -s "$vulkan_icd_target" "$vulkan_icd"
+			if [ -f "$vulkan_lib_target" ]; then
+				owned_link "$vulkan_lib" "$vulkan_lib_target" || ln -s "$vulkan_lib_target" "$vulkan_lib"
+			fi
+		fi
+		echo "IntelGfx, Intel Iris OpenGL, and Vulkan ANV selected. Reboot to load the kernel driver."
 		;;
 	disable)
+		if owned_link "$vulkan_icd" "$vulkan_icd_target"; then rm "$vulkan_icd"; fi
+		if owned_link "$vulkan_lib" "$vulkan_lib_target"; then rm "$vulkan_lib"; fi
 		if owned_link "$renderer" "$renderer_target"; then rm "$renderer"; fi
 		if owned_link "$device" ../../bin/intel_extreme && owned_link "$binary" "$target"; then
 			rm "$device"
 		fi
 		if owned_link "$binary" "$target"; then rm "$binary"; fi
-		echo "IntelGfx and Intel Iris overrides removed. Reboot to restore the packaged driver."
+		echo "IntelGfx, Intel Iris, and Vulkan overrides removed. Reboot to restore the packaged driver."
 		;;
 	*)
 		echo "Usage: intel_gfx_activate [status|enable|disable]" >&2

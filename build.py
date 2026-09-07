@@ -11,9 +11,15 @@ import sys
 
 def main():
     project = Path(__file__).resolve().parent
+    default_build = project.parent / 'generated.x86_64'
+    if not (default_build / 'build/BuildConfig').is_file():
+        if (project.parent / 'haiku/generated.x86_64/build/BuildConfig').is_file():
+            default_build = project.parent / 'haiku/generated.x86_64'
+        elif 'HAIKU_OUTPUT_DIR' in os.environ:
+            default_build = Path(os.environ['HAIKU_OUTPUT_DIR']).resolve()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--haiku-build', type=Path,
-                        default=project.parent / 'generated.x86_64')
+                        default=default_build)
     parser.add_argument('-j', '--jobs', type=int, default=4)
     parser.add_argument('--package', action='store_true')
     parser.add_argument('--mesa', action='store_true',
@@ -28,9 +34,15 @@ def main():
     # Jam quoting is deliberately restricted here, rather than interpolating code.
     if any(c in str(project.parent) for c in '\n\r"$[];'):
         parser.error('unsupported characters in source directory path')
+    haiku_top = project.parent
+    if not (haiku_top / 'Jamfile').is_file():
+        if (haiku_top / 'haiku/Jamfile').is_file():
+            haiku_top = haiku_top / 'haiku'
+        elif (build.parent / 'Jamfile').is_file():
+            haiku_top = build.parent
     wrapper = out / 'Build.jam'
     wrapper.write_text('JAMFILE = Jamfile ;\n'
-                       f'HAIKU_TOP = "{os.path.relpath(project.parent, build)}" ;\n'
+                       f'HAIKU_TOP = "{os.path.relpath(haiku_top, build)}" ;\n'
                        'HAIKU_OUTPUT_DIR = . ;\n'
                        'include [ FDirName $(HAIKU_TOP) Jamfile ] ;\n'
                        'SubInclude HAIKU_TOP intel_gfx ;\n')
@@ -52,6 +64,8 @@ def main():
         print('\n'.join((out / 'build.log').read_text().splitlines()[-100:]), file=sys.stderr)
         return result.returncode
     mesa_renderer = project / 'out/mesa/Intel Gallium'
+    mesa_vulkan = project / 'out/mesa/libvulkan_intel.so'
+    mesa_icd = project / 'out/mesa/intel_icd.x86_64.json'
     if args.mesa or args.package:
         subprocess.run([
             sys.executable, project / 'mesa/build.py',
@@ -64,25 +78,30 @@ def main():
     stage = out / 'stage'
     if stage.exists():
         shutil.rmtree(stage)
-    files = {
-        objects / 'kernel/intel_gfx': 'data/intel_gfx/kernel/intel_gfx',
-        objects / 'display/intel_gfx.accelerant': 'add-ons/accelerants/intel_gfx.accelerant',
-        objects / 'server/IntelGfx': 'servers/IntelGfx',
-        objects / 'tools/intel_gfx_ctl': 'bin/intel_gfx_ctl',
-        objects / 'input/intel_gfx_brightness_keys':
-            'add-ons/input_server/filters/intel_gfx_brightness_keys',
-        objects / 'demo/intel_gfx_cube': 'bin/intel_gfx_cube',
-        objects / 'monitor/intel_gfx_monitor': 'bin/intel_gfx_monitor',
-        project / 'package/intel_gfx_activate': 'bin/intel_gfx_activate',
-        project / 'README.md': 'documentation/packages/intel_gfx/README.md',
-        project / 'UPSTREAM.json': 'documentation/packages/intel_gfx/UPSTREAM.json',
-        project / 'License.md': 'data/licenses/IntelGfx',
-        mesa_renderer: 'data/intel_gfx/opengl/Intel Gallium',
-    }
-    for source, destination in files.items():
-        target = stage / destination
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+    file_pairs = [
+        (objects / 'kernel/intel_gfx', 'data/intel_gfx/kernel/intel_gfx'),
+        (objects / 'display/intel_gfx.accelerant', 'add-ons/accelerants/intel_gfx.accelerant'),
+        (objects / 'server/IntelGfx', 'servers/IntelGfx'),
+        (objects / 'tools/intel_gfx_ctl', 'bin/intel_gfx_ctl'),
+        (objects / 'input/intel_gfx_brightness_keys',
+            'add-ons/input_server/filters/intel_gfx_brightness_keys'),
+        (objects / 'demo/intel_gfx_cube', 'bin/intel_gfx_cube'),
+        (objects / 'monitor/intel_gfx_monitor', 'bin/intel_gfx_monitor'),
+        (project / 'package/intel_gfx_activate', 'bin/intel_gfx_activate'),
+        (project / 'README.md', 'documentation/packages/intel_gfx/README.md'),
+        (project / 'UPSTREAM.json', 'documentation/packages/intel_gfx/UPSTREAM.json'),
+        (project / 'License.md', 'data/licenses/IntelGfx'),
+        (mesa_renderer, 'data/intel_gfx/opengl/Intel Gallium'),
+        (mesa_vulkan, 'lib/libvulkan_intel.so'),
+        (mesa_icd, 'data/vulkan/icd.d/intel_icd.x86_64.json'),
+        (mesa_vulkan, 'data/intel_gfx/vulkan/libvulkan_intel.so'),
+        (mesa_icd, 'data/intel_gfx/vulkan/intel_icd.x86_64.json'),
+    ]
+    for source, destination in file_pairs:
+        if source.is_file():
+            target = stage / destination
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
     shutil.copy2(project / 'package/PackageInfo', stage / '.PackageInfo')
     package = build / 'objects/linux/x86_64/release/tools/package/package'
     if sys.platform == 'haiku1':
