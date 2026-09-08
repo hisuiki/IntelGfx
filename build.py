@@ -91,7 +91,7 @@ def main():
         (project / 'README.md', 'documentation/packages/intel_gfx/README.md'),
         (project / 'UPSTREAM.json', 'documentation/packages/intel_gfx/UPSTREAM.json'),
         (project / 'License.md', 'data/licenses/IntelGfx'),
-        (mesa_renderer, 'add-ons/opengl/Intel Gallium'),
+        (mesa_renderer, 'non-packaged/add-ons/opengl/Intel Gallium'),
         (mesa_vulkan, 'lib/libvulkan_intel.so'),
         (mesa_icd, 'data/vulkan/icd.d/intel_icd.x86_64.json'),
     ]
@@ -111,7 +111,7 @@ def main():
         parser.error('package tool not built; build the Haiku package tool first')
     env = dict(environment)
     env['LD_LIBRARY_PATH'] = str(build / 'objects/linux/lib') + ':' + env.get('LD_LIBRARY_PATH', '')
-    hpkg = out / 'intel_gfx-0.3.0-1-x86_64.hpkg'
+    hpkg = out / 'intel_gfx-0.3.1-1-x86_64.hpkg'
     subprocess.run([str(package), 'create', '-C', str(stage), str(hpkg)],
                    check=True, env=env)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'],

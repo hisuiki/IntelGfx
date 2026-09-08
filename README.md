@@ -87,7 +87,7 @@ python3 intel_gfx/mesa/build.py --haiku-build generated.x86_64 --clean
 ```
 
 Outputs are placed below `intel_gfx/out/`. The package is
-`intel_gfx-0.3.0-1-x86_64.hpkg`; the stripped renderer is also available as
+`intel_gfx-0.3.1-1-x86_64.hpkg`; the stripped renderer is also available as
 `out/mesa/Intel Gallium`.
 
 ## Install
@@ -95,13 +95,16 @@ Outputs are placed below `intel_gfx/out/`. The package is
 When built as the `intel_gfx` submodule of Haiku, `intel_gfx.hpkg` is included
 in x86_64 images and installed by default. It owns the canonical
 `intel_extreme` driver, `intel_extreme.accelerant`, Iris OpenGL renderer, and
-ANV Vulkan ICD; no non-packaged override or activation step is used.
+ANV Vulkan ICD; no activation step or user override is used. The HPKG places
+the Iris add-on in the system non-packaged search tier because Haiku's current
+OpenGL roster otherwise selects Software Pipe before a renderer supplied by a
+later package. The file is still package-owned and disappears on uninstall.
 
 For a standalone test build, copy the HPKG to `/boot/system/packages/` and
 reboot:
 
 ```sh
-pkgman install ./intel_gfx-0.3.0-1-x86_64.hpkg
+pkgman install ./intel_gfx-0.3.1-1-x86_64.hpkg
 reboot
 ```
 

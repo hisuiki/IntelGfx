@@ -1,7 +1,7 @@
 SubDir HAIKU_TOP intel_gfx package ;
 
 local outDir = [ FDirName $(HAIKU_TOP) intel_gfx out ] ;
-local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.0-1-x86_64.hpkg" ] ;
+local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.1-1-x86_64.hpkg" ] ;
 
 local mesaDir = [ FDirName $(outDir) mesa ] ;
 local irisTarget = [ FDirName $(mesaDir) "Intel Gallium" ] ;
@@ -43,7 +43,7 @@ actions BuildIntelGfxPackage
 	mkdir -p "$STAGE/add-ons/input_server/filters"
 	mkdir -p "$STAGE/documentation/packages/intel_gfx"
 	mkdir -p "$STAGE/data/licenses"
-	mkdir -p "$STAGE/add-ons/opengl"
+	mkdir -p "$STAGE/non-packaged/add-ons/opengl"
 	mkdir -p "$STAGE/lib"
 	mkdir -p "$STAGE/data/vulkan/icd.d"
 
@@ -58,7 +58,7 @@ actions BuildIntelGfxPackage
 	cp -f "$(2[8])" "$STAGE/documentation/packages/intel_gfx/README.md"
 	cp -f "$(2[9])" "$STAGE/documentation/packages/intel_gfx/UPSTREAM.json"
 	cp -f "$(2[10])" "$STAGE/data/licenses/IntelGfx"
-	cp -f "$(2[11])" "$STAGE/add-ons/opengl/Intel Gallium"
+	cp -f "$(2[11])" "$STAGE/non-packaged/add-ons/opengl/Intel Gallium"
 	cp -f "$(2[12])" "$STAGE/lib/libvulkan_intel.so"
 	cp -f "$(2[13])" "$STAGE/data/vulkan/icd.d/intel_icd.x86_64.json"
 	cp -f "$(2[14])" "$STAGE/.PackageInfo"
