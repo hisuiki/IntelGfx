@@ -5,9 +5,9 @@ x86_64. Its first hardware targets are Skylake and Kaby Lake integrated GPUs,
 including HD Graphics 530 and HD Graphics 610.
 
 The package contains a kernel rendering ABI, a Mesa 22.0.5 Iris Gallium
-renderer named `Intel Gallium`, the existing Intel display accelerant under a
-separate signature, diagnostics, and an updated OpenGL cube. Driver selection
-is explicit and reversible.
+renderer named `Intel Gallium`, Intel Vulkan ANV with a native Haiku WSI,
+diagnostics, and an updated OpenGL cube. It is the single source and package
+for Haiku's `intel_extreme` kernel driver and display accelerant.
 
 The implementation now provides the pieces Iris needs:
 
@@ -90,25 +90,20 @@ Outputs are placed below `intel_gfx/out/`. The package is
 `intel_gfx-0.2.0-1-x86_64.hpkg`; the stripped renderer is also available as
 `out/mesa/Intel Gallium`.
 
-## Install and activate
+## Install
 
-Copy the HPKG to `/boot/system/packages/` on the test machine, then enable the
-overrides:
+When built as the `intel_gfx` submodule of Haiku, `intel_gfx.hpkg` is included
+in x86_64 images and installed by default. It owns the canonical
+`intel_extreme` driver, `intel_extreme.accelerant`, Iris OpenGL renderer, and
+ANV Vulkan ICD; no non-packaged override or activation step is used.
+
+For a standalone test build, copy the HPKG to `/boot/system/packages/` and
+reboot:
 
 ```sh
-intel_gfx_activate status
-intel_gfx_activate enable
+pkgman install ./intel_gfx-0.2.0-1-x86_64.hpkg
 reboot
 ```
-
-Activation creates owned links under the user's non-packaged add-on directory
-for both the legacy `intel_extreme` kernel name and `opengl/Intel Gallium`.
-The user add-on directory is searched before the packaged OpenGL add-ons, so
-new GL applications select Iris after activation. The reboot makes the kernel
-driver and display accelerant active.
-
-The tool refuses to replace links or OpenGL add-ons it does not own. Installing
-the package alone does not replace the running display driver.
 
 ## Test
 
@@ -220,30 +215,29 @@ rules; its first real-hardware validation is the outstanding step noted above.
 
 ## Scope and limitations
 
-The native Iris capability is exposed only for Gen9 Skylake (`0x19xx`) and
-Kaby Lake (`0x59xx`) PCI IDs. Other generations continue to use the display
-and legacy diagnostic paths and cannot select this renderer.
+The native Iris and ANV capabilities are exposed only for Gen9 Skylake
+(`0x19xx`) and Kaby Lake (`0x59xx`) PCI IDs. Other generations continue to use
+the unified display path but cannot select these renderers.
 
 There is no GPU reset or replay after a hang. Interrupt-driven scheduling,
 parallel engine queues, eviction, sparse unbinding, PRIME sharing, direct
 presentation, suspend/resume validation, and broader Intel generations are
-not implemented. Vulkan remains out of scope: ANV would additionally require
-a Haiku Vulkan WSI, which does not exist in this tree.
+not implemented. The Vulkan path includes a Haiku WSI but remains experimental
+and needs conformance and application testing on supported hardware.
 
 ## Roll back
 
-Disable the owned links before removing the package:
+Remove the package and reboot. Haiku then falls back to another applicable
+graphics driver (normally the framebuffer accelerant):
 
 ```sh
-intel_gfx_activate disable
+pkgman uninstall intel_gfx
 reboot
 ```
 
-If the desktop cannot start, boot with **Disable user add-ons** or use a Haiku
-recovery boot. Confirm and remove only links created by this package below
-`home/config/non-packaged/add-ons/`: the two `kernel/drivers/intel_extreme`
-links and `opengl/Intel Gallium`. The activation script performs the same
-ownership checks during normal rollback.
+If the desktop cannot start, use a previous package state from the boot menu
+or a Haiku recovery boot and remove `intel_gfx.hpkg` from the active package
+set.
 
 ## Source layout
 
@@ -253,11 +247,12 @@ ownership checks during normal rollback.
 * `client/`: native device and mapped-buffer wrappers.
 * `mesa/`: reproducible Mesa patch, Haiku Iris target, compatibility adapter,
   and standalone cross-build.
-* `display/`: Intel display accelerant with an independent signature.
+* `display/`: canonical `intel_extreme.accelerant` display component.
 * `demo/`: renderer-verifying OpenGL cube.
 * `tools/`, `server/`, and `input/`: diagnostics, discovery service, and
   brightness key integration.
-* `package/`: HPKG metadata and reversible activation.
+* `package/`: standalone HPKG metadata; the Haiku tree owns default-image
+  integration.
 
 `UPSTREAM.json` records the Haiku revision and original display source paths.
 Vendored display code retains its original licenses. The hardware programming

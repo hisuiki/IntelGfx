@@ -136,7 +136,7 @@
 #define VLV_DISPLAY_BASE		0x180000
 
 #define DEVICE_NAME				"intel_extreme"
-#define INTEL_ACCELERANT_NAME	"intel_gfx.accelerant"
+#define INTEL_ACCELERANT_NAME	"intel_extreme.accelerant"
 
 // We encode the register block into the value and extract/translate it when
 // actually accessing.

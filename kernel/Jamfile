@@ -4,7 +4,7 @@ UsePrivateHeaders graphics ;
 UsePrivateHeaders [ FDirName graphics vesa ] ;
 UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateKernelHeaders ;
-KernelAddon intel_gfx :
+KernelAddon intel_extreme :
 	bios.cpp driver.cpp device.cpp intel_extreme.cpp power.cpp
 	RenderClient.cpp BufferObject.cpp GlobalGTT.cpp PageTables.cpp
 	RenderEngine.cpp kernel_cpp.cpp

@@ -14,8 +14,8 @@ SubInclude HAIKU_TOP intel_gfx package ;
 # Top-level meta target for core driver binaries
 NotFile intel_gfx_binaries ;
 Depends intel_gfx_binaries :
-	intel_gfx
-	intel_gfx.accelerant
+	intel_extreme
+	intel_extreme.accelerant
 	IntelGfx
 	intel_gfx_ctl
 	intel_gfx_brightness_keys

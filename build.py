@@ -44,10 +44,9 @@ def main():
     wrapper.write_text('JAMFILE = Jamfile ;\n'
                        f'HAIKU_TOP = "{os.path.relpath(haiku_top, build)}" ;\n'
                        'HAIKU_OUTPUT_DIR = . ;\n'
-                       'include [ FDirName $(HAIKU_TOP) Jamfile ] ;\n'
-                       'SubInclude HAIKU_TOP intel_gfx ;\n')
+                       'include [ FDirName $(HAIKU_TOP) Jamfile ] ;\n')
     command = ['jam', f'-sJAMFILE={wrapper}', '-sHAIKU_IGNORE_USER_BUILD_CONFIG=1',
-               f'-j{args.jobs}', 'intel_gfx', 'intel_gfx.accelerant',
+               f'-j{args.jobs}', 'intel_extreme', 'intel_extreme.accelerant',
                'IntelGfx', 'intel_gfx_ctl', 'intel_gfx_brightness_keys', 'intel_gfx_cube',
                'intel_gfx_monitor']
     if args.tests:
@@ -79,29 +78,31 @@ def main():
     if stage.exists():
         shutil.rmtree(stage)
     file_pairs = [
-        (objects / 'kernel/intel_gfx', 'data/intel_gfx/kernel/intel_gfx'),
-        (objects / 'display/intel_gfx.accelerant', 'add-ons/accelerants/intel_gfx.accelerant'),
+        (objects / 'kernel/intel_extreme',
+            'add-ons/kernel/drivers/bin/intel_extreme'),
+        (objects / 'display/intel_extreme.accelerant',
+            'add-ons/accelerants/intel_extreme.accelerant'),
         (objects / 'server/IntelGfx', 'servers/IntelGfx'),
         (objects / 'tools/intel_gfx_ctl', 'bin/intel_gfx_ctl'),
         (objects / 'input/intel_gfx_brightness_keys',
             'add-ons/input_server/filters/intel_gfx_brightness_keys'),
         (objects / 'demo/intel_gfx_cube', 'bin/intel_gfx_cube'),
         (objects / 'monitor/intel_gfx_monitor', 'bin/intel_gfx_monitor'),
-        (project / 'package/intel_gfx_activate', 'bin/intel_gfx_activate'),
         (project / 'README.md', 'documentation/packages/intel_gfx/README.md'),
         (project / 'UPSTREAM.json', 'documentation/packages/intel_gfx/UPSTREAM.json'),
         (project / 'License.md', 'data/licenses/IntelGfx'),
-        (mesa_renderer, 'data/intel_gfx/opengl/Intel Gallium'),
+        (mesa_renderer, 'add-ons/opengl/Intel Gallium'),
         (mesa_vulkan, 'lib/libvulkan_intel.so'),
         (mesa_icd, 'data/vulkan/icd.d/intel_icd.x86_64.json'),
-        (mesa_vulkan, 'data/intel_gfx/vulkan/libvulkan_intel.so'),
-        (mesa_icd, 'data/intel_gfx/vulkan/intel_icd.x86_64.json'),
     ]
     for source, destination in file_pairs:
         if source.is_file():
             target = stage / destination
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+    driver_link = stage / 'add-ons/kernel/drivers/dev/graphics/intel_extreme'
+    driver_link.parent.mkdir(parents=True, exist_ok=True)
+    driver_link.symlink_to('../../bin/intel_extreme')
     shutil.copy2(project / 'package/PackageInfo', stage / '.PackageInfo')
     package = build / 'objects/linux/x86_64/release/tools/package/package'
     if sys.platform == 'haiku1':

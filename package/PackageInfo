@@ -2,7 +2,7 @@ name intel_gfx
 version 0.2.0-1
 architecture x86_64
 summary "Experimental Intel display, Iris OpenGL, and Vulkan ANV graphics driver"
-description "IntelGfx display driver, isolated GPU contexts, native command submission, Mesa Iris OpenGL renderer, Intel Vulkan ANV driver with Haiku WSI, device service and diagnostics. Driver activation is explicit."
+description "Unified Intel display and rendering stack for Haiku. It includes the intel_extreme kernel driver and accelerant, isolated GPU contexts, native command submission, Mesa Iris OpenGL, Intel Vulkan ANV with Haiku WSI, a device service, and diagnostics."
 packager "IntelGfx contributors"
 vendor "IntelGfx contributors"
 copyrights {
@@ -15,7 +15,6 @@ provides {
 	mesa_iris = 22.0.5
 	mesa_vulkan_intel = 22.0.5
 	cmd:intel_gfx_ctl = 0.2.0
-	cmd:intel_gfx_activate = 0.2.0
 }
 requires {
 	haiku

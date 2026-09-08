@@ -110,7 +110,7 @@ def jam_environment(build):
     return dict(os.environ, LC_ALL='C', PWD=str(build))
 
 
-def configure(build, stage, package, settings):
+def configure(build, stage, settings):
     """Add our block to UserBuildConfig, keeping whatever else is in it."""
     config = build / 'UserBuildConfig'
     kept = []
@@ -133,44 +133,12 @@ def configure(build, stage, package, settings):
         print(f'Replacing {len(dropped)} SSH lines from the VM rebuild script',
               flush=True)
         kept = [line for line in kept if line not in dropped]
-    # Everything goes in non-packaged: a non-packaged driver hides the
-    # packaged one of the same name, so only one of them owns the PCI
-    # function, and the accelerant and tools need no package activation to be
-    # found. The HPKG rides along on the Desktop for installing on a real
-    # system later.
-    #
-    # The driver is the file the device path names, rather than the usual
-    # symlink into a bin directory beside it: the kernel loads whatever that
-    # entry resolves to, and AddSymlinkToHaikuImage cannot be called from
-    # UserBuildConfig, where it writes into the image script before the
-    # script's own targets have been placed.
-    #
-    # It goes under the home directory rather than beside the system, because
-    # a driver in the system's own non-packaged directory does not actually
-    # override the packaged driver of the same name: the kernel ranks drivers
-    # by which directory their path starts with, and it tests the system
-    # directory first, which is a prefix of the system's non-packaged
-    # directory too. Both end up ranked equally and the packaged driver, being
-    # scanned last, wins. The home directory is tested on its own and is
-    # scanned first, so a driver there really does take precedence.
-    files = {
-        'intel_extreme':
-            'home config non-packaged add-ons kernel drivers dev graphics',
-        'intel_gfx.accelerant': 'system non-packaged add-ons accelerants',
-        'intel_gfx_ctl': 'system non-packaged bin',
-        'intel_gfx_activate': 'system non-packaged bin',
-        'intel_gfx_cube': 'system non-packaged bin',
-        'Intel Gallium': 'home config non-packaged add-ons opengl',
-        'libvulkan_intel.so': 'system non-packaged lib',
-        'intel_icd.x86_64.json': 'system non-packaged data vulkan icd.d',
-        'IntelGfx': 'system non-packaged servers',
-    }
+    # IntelGfx itself is a regular package in the default image. This block is
+    # only for throwaway-image settings that do not belong in the package.
     block = [BEGIN]
-    for name, directory in list(files.items()) + settings:
+    for name, directory in settings:
         block.append(f'SEARCH on <intel_gfx>{name} = "{stage}" ;')
         block.append(f'AddFilesToHaikuImage {directory} : <intel_gfx>{name} ;')
-    block.append(f'SEARCH on <intel_gfx>{package.name} = "{package.parent}" ;')
-    block.append(f'AddFilesToHaikuImage home Desktop : <intel_gfx>{package.name} ;')
     block.append(END)
     config.write_text('\n'.join(kept + block) + '\n')
     return config
@@ -228,27 +196,10 @@ def main():
             shutil.rmtree(stage)
         stage.mkdir(parents=True)
         objects = build / 'objects/haiku/x86_64/release'
-        staged = {
-            objects / 'kernel/intel_gfx': 'intel_extreme',
-            objects / 'display/intel_gfx.accelerant': 'intel_gfx.accelerant',
-            objects / 'server/IntelGfx': 'IntelGfx',
-            objects / 'tools/intel_gfx_ctl': 'intel_gfx_ctl',
-            objects / 'demo/intel_gfx_cube': 'intel_gfx_cube',
-            project / 'out/mesa/Intel Gallium': 'Intel Gallium',
-            project / 'out/mesa/libvulkan_intel.so': 'libvulkan_intel.so',
-            project / 'out/mesa/intel_icd.x86_64.json': 'intel_icd.x86_64.json',
-            project / 'package/intel_gfx_activate': 'intel_gfx_activate',
-        }
-        for source, name in staged.items():
-            target = stage / name
-            shutil.copy2(source, target)
-            target.chmod(0o755)
-        package = project / 'out/intel_gfx-0.2.0-1-x86_64.hpkg'
-
         settings = stage_settings(stage, 'user', args.password,
                                   key_file=args.ssh_key, debug=args.debug)
 
-        config = configure(build, stage, package, settings)
+        config = configure(build, stage, settings)
         print(f'Configured {config}; building the image', flush=True)
         result = subprocess.run(['jam', '-q', f'-j{args.jobs}',
                                  '@nightly-anyboot'],
