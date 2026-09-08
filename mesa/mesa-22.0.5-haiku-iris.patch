@@ -467,6 +467,13 @@
  #endif
  #ifdef VK_USE_PLATFORM_WAYLAND_KHR
     .KHR_wayland_surface                      = true,
+--- a/src/intel/vulkan/anv_private.h
++++ b/src/intel/vulkan/anv_private.h
+@@ -934,3 +934,3 @@ struct anv_physical_device {
+     struct anv_instance *                       instance;
+-    char                                        path[20];
++    char                                        path[128];
+     struct intel_device_info                      info;
 --- a/src/intel/vulkan/meson.build
 +++ b/src/intel/vulkan/meson.build
 @@ -149,6 +149,10 @@

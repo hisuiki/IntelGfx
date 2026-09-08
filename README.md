@@ -87,7 +87,7 @@ python3 intel_gfx/mesa/build.py --haiku-build generated.x86_64 --clean
 ```
 
 Outputs are placed below `intel_gfx/out/`. The package is
-`intel_gfx-0.3.1-1-x86_64.hpkg`; the stripped renderer is also available as
+`intel_gfx-0.3.2-1-x86_64.hpkg`; the stripped renderer is also available as
 `out/mesa/Intel Gallium`.
 
 ## Install
@@ -104,7 +104,7 @@ For a standalone test build, copy the HPKG to `/boot/system/packages/` and
 reboot:
 
 ```sh
-pkgman install ./intel_gfx-0.3.1-1-x86_64.hpkg
+pkgman install ./intel_gfx-0.3.2-1-x86_64.hpkg
 reboot
 ```
 

@@ -55,18 +55,23 @@ def main() -> int:
             shutil.rmtree(source)
         if mesa_build.is_dir():
             shutil.rmtree(mesa_build)
+    ports_patch = (haiku.parent / "haikuports/sys-libs/mesa/patches"
+                   / f"mesa-{VERSION}.patchset")
+    intel_patch = here / f"mesa-{VERSION}-haiku-iris.patch"
+    fingerprint = "\n".join([
+        SHA256,
+        hashlib.sha256(ports_patch.read_bytes()).hexdigest(),
+        hashlib.sha256(intel_patch.read_bytes()).hexdigest(),
+    ]) + "\n"
     stamp = source / ".intel-gfx-overlay"
-    if not stamp.is_file():
+    if not stamp.is_file() or stamp.read_text() != fingerprint:
         if source.is_dir():
             shutil.rmtree(source)
         with tarfile.open(archive) as tar:
             tar.extractall(out, filter="data")
-        ports_patch = (haiku.parent / "haikuports/sys-libs/mesa/patches"
-                       / f"mesa-{VERSION}.patchset")
         run(["patch", "--batch", "-p1", "-i", ports_patch], cwd=source)
-        run(["patch", "--batch", "-p1", "-i",
-             here / f"mesa-{VERSION}-haiku-iris.patch"], cwd=source)
-        stamp.write_text(SHA256 + "\n")
+        run(["patch", "--batch", "-p1", "-i", intel_patch], cwd=source)
+        stamp.write_text(fingerprint)
 
     # Overlay files are the part of the port edited during development. Keep
     # an existing source tree in sync so an incremental build never silently
