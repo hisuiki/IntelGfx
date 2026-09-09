@@ -1,7 +1,7 @@
 SubDir HAIKU_TOP intel_gfx package ;
 
 local outDir = [ FDirName $(HAIKU_TOP) intel_gfx out ] ;
-local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.2-1-x86_64.hpkg" ] ;
+local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.3-1-x86_64.hpkg" ] ;
 
 local mesaDir = [ FDirName $(outDir) mesa ] ;
 local irisTarget = [ FDirName $(mesaDir) "Intel Gallium" ] ;
@@ -12,6 +12,7 @@ local packageInfo = [ FDirName $(HAIKU_TOP) intel_gfx package PackageInfo ] ;
 local readme = [ FDirName $(HAIKU_TOP) intel_gfx README.md ] ;
 local upstream = [ FDirName $(HAIKU_TOP) intel_gfx UPSTREAM.json ] ;
 local license = [ FDirName $(HAIKU_TOP) intel_gfx License.md ] ;
+local launchSettings = [ FDirName $(HAIKU_TOP) intel_gfx package intel_gfx.launch ] ;
 
 local objectsDir = [ FDirName $(HAIKU_OUTPUT_DIR) objects haiku $(TARGET_ARCH) release ] ;
 local kernelDriver = [ FDirName $(objectsDir) kernel intel_extreme ] ;
@@ -46,6 +47,7 @@ actions BuildIntelGfxPackage
 	mkdir -p "$STAGE/non-packaged/add-ons/opengl"
 	mkdir -p "$STAGE/lib"
 	mkdir -p "$STAGE/add-ons/vulkan/icd.d"
+	mkdir -p "$STAGE/data/launch"
 
 	cp -f "$(2[1])" "$STAGE/add-ons/kernel/drivers/bin/intel_extreme"
 	ln -s ../../bin/intel_extreme "$STAGE/add-ons/kernel/drivers/dev/graphics/intel_extreme"
@@ -62,12 +64,13 @@ actions BuildIntelGfxPackage
 	cp -f "$(2[12])" "$STAGE/lib/libvulkan_intel.so"
 	cp -f "$(2[13])" "$STAGE/add-ons/vulkan/icd.d/intel_icd.x86_64.json"
 	cp -f "$(2[14])" "$STAGE/.PackageInfo"
+	cp -f "$(2[15])" "$STAGE/data/launch/intel_gfx"
 
-	PKG_TOOL="$(2[15])"
+	PKG_TOOL="$(2[16])"
 	if [ ! -f "$PKG_TOOL" ]; then
 		PKG_TOOL="/boot/system/bin/package"
 	fi
-	LD_LIBRARY_PATH="$(2[16]):$LD_LIBRARY_PATH" "$PKG_TOOL" create -C "$STAGE" "$(1)"
+	LD_LIBRARY_PATH="$(2[17]):$LD_LIBRARY_PATH" "$PKG_TOOL" create -C "$STAGE" "$(1)"
 	echo "Created $(1)"
 }
 
@@ -86,6 +89,7 @@ BuildIntelGfxPackage $(hpkgTarget) :
 	$(vkTarget)
 	$(icdTarget)
 	$(packageInfo)
+	$(launchSettings)
 	$(packageTool)
 	$(packageLibDir)
 ;

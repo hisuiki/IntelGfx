@@ -1,0 +1,5 @@
+service x-vnd.IntelGfx {
+	launch /system/servers/IntelGfx
+	legacy
+	no_safemode
+}

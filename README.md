@@ -104,7 +104,7 @@ For a standalone test build, copy the HPKG to `/boot/system/packages/` and
 reboot:
 
 ```sh
-pkgman install ./intel_gfx-0.3.2-1-x86_64.hpkg
+pkgman install ./intel_gfx-0.3.3-1-x86_64.hpkg
 reboot
 ```
 
@@ -120,6 +120,13 @@ intel_gfx_ctl gtt-test /dev/graphics/intel_extreme_000200
 intel_gfx_ctl native-test /dev/graphics/intel_extreme_000200
 intel_gfx_cube --require-hardware --frames 600
 ```
+
+The packaged `IntelGfx` discovery service is registered with Haiku's system
+launch daemon and probes `/dev/graphics` automatically during boot. No
+`intel_gfx_ctl` command is required to enable the driver; the tool only reports
+state and runs diagnostics. The Iris add-on is package-owned but installed in
+Haiku's system non-packaged renderer tier so a working Intel renderer is tried
+before the base Mesa llvmpipe add-on.
 
 `native-test` is the first hardware gate. It creates a private PPGTT, a logical
 render context, two fixed virtual bindings, and a multi-object render batch. It
