@@ -296,7 +296,6 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
  case DRM_IOCTL_I915_GEM_EXECBUFFER2: {
   auto& r = *(drm_i915_gem_execbuffer2*)data;
   if (!r.buffer_count || r.buffer_count > kMaxBuffers || !r.buffers_ptr
-   || !(r.flags & I915_EXEC_BATCH_FIRST)
    || (r.flags & I915_EXEC_RING_MASK) != I915_EXEC_RENDER)
    return fail(EINVAL);
   auto objects = (drm_i915_gem_exec_object2*)(uintptr_t)r.buffers_ptr;
@@ -315,7 +314,9 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
     }
    }
   }
-  Buffer* batch = buffer(fd, objects[0].handle);
+  uint32_t batchIndex = (r.flags & I915_EXEC_BATCH_FIRST)
+   ? 0 : r.buffer_count - 1;
+  Buffer* batch = buffer(fd, objects[batchIndex].handle);
   if (!batch || r.batch_start_offset >= batch->size
    || r.batch_len > batch->size - r.batch_start_offset)
    return fail(EINVAL);
@@ -327,7 +328,7 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
    : batch->size - r.batch_start_offset;
 
   auto submit = Request<SubmitObjects>();
-  submit.context = r.rsvd1; submit.batchHandle = objects[0].handle;
+  submit.context = r.rsvd1; submit.batchHandle = objects[batchIndex].handle;
   submit.offset = r.batch_start_offset; submit.length = length;
   submit.count = r.buffer_count;
   for (uint32_t i = 0; i < r.buffer_count; i++) {
@@ -557,4 +558,3 @@ extern "C" int drmGetCap(int fd, uint64_t capability, uint64_t *value)
   return -EINVAL;
  }
 }
-

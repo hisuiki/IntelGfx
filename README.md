@@ -25,7 +25,8 @@ The implementation now provides the pieces Iris needs:
 
 This has run on the target hardware. On a ThinkPad P50's Skylake GT2
 (8086:191b) the blitter and render engines both pass `submit-test`, the native
-ABI passes `native-test`, and `intel_gfx_cube` draws with
+ABI passes `native-test`, ANV creates and idles an Intel Vulkan logical device,
+and `intel_gfx_cube` draws with
 `Mesa Intel(R) HD Graphics 530 (SKL GT2) (Iris / Haiku IntelGfx)` for thousands
 of frames without faulting. It renders at roughly 1050 frames per second, and
 at 59.7 with the cube's vertical sync box ticked, which is the panel. It began
@@ -87,7 +88,7 @@ python3 intel_gfx/mesa/build.py --haiku-build generated.x86_64 --clean
 ```
 
 Outputs are placed below `intel_gfx/out/`. The package is
-`intel_gfx-0.3.2-1-x86_64.hpkg`; the stripped renderer is also available as
+`intel_gfx-0.3.5-1-x86_64.hpkg`; the stripped renderer is also available as
 `out/mesa/Intel Gallium`.
 
 ## Install
@@ -95,16 +96,19 @@ Outputs are placed below `intel_gfx/out/`. The package is
 When built as the `intel_gfx` submodule of Haiku, `intel_gfx.hpkg` is included
 in x86_64 images and installed by default. It owns the canonical
 `intel_extreme` driver, `intel_extreme.accelerant`, Iris OpenGL renderer, and
-ANV Vulkan ICD; no activation step or user override is used. The HPKG places
-the Iris add-on in the system non-packaged search tier because Haiku's current
-OpenGL roster otherwise selects Software Pipe before a renderer supplied by a
-later package. The file is still package-owned and disappears on uninstall.
+ANV Vulkan ICD; no activation step or user command is used. The HPKG owns the
+Iris add-on in the normal system add-on directory. At boot its launch service
+registers a symlink in the higher-priority system non-packaged search tier,
+because Haiku's current OpenGL roster otherwise selects Software Pipe before a
+renderer supplied by a later package. The service removes its registration on
+exit, while the renderer itself remains package-owned and disappears on
+uninstall.
 
 For a standalone test build, copy the HPKG to `/boot/system/packages/` and
 reboot:
 
 ```sh
-pkgman install ./intel_gfx-0.3.4-1-x86_64.hpkg
+pkgman install ./intel_gfx-0.3.5-1-x86_64.hpkg
 reboot
 ```
 
@@ -222,7 +226,8 @@ PPGTT, executed batches, updated CPU-visible fences, filled the display, and
 copied pixels back. Earlier render bring-up reached batch completion but could
 wedge on a following submission. The native path adds the missing isolated
 contexts, render workarounds, cache invalidation, and complete object lifetime
-rules; its first real-hardware validation is the outstanding step noted above.
+rules. Iris and the ANV device lifecycle have both passed real-hardware
+validation on the Skylake GT2 noted above.
 
 ## Scope and limitations
 
@@ -233,8 +238,9 @@ the unified display path but cannot select these renderers.
 There is no GPU reset or replay after a hang. Interrupt-driven scheduling,
 parallel engine queues, eviction, sparse unbinding, PRIME sharing, direct
 presentation, suspend/resume validation, and broader Intel generations are
-not implemented. The Vulkan path includes a Haiku WSI but remains experimental
-and needs conformance and application testing on supported hardware.
+not implemented. The Vulkan path includes a Haiku WSI and now passes instance,
+physical-device, logical-device, and idle/destroy lifecycle testing on Skylake;
+presentation and conformance testing remain outstanding.
 
 ## Roll back
 

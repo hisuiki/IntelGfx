@@ -86,7 +86,9 @@ main()
 		result = vkCreateDevice(physicalDevice, &deviceInfo, NULL, &device);
 		if (result != VK_SUCCESS)
 			fail("vkCreateDevice(Intel)", result);
-		vkDeviceWaitIdle(device);
+		result = vkDeviceWaitIdle(device);
+		if (result != VK_SUCCESS)
+			fail("vkDeviceWaitIdle(Intel)", result);
 		vkDestroyDevice(device, NULL);
 		foundIntel = true;
 	}

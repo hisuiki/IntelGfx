@@ -680,6 +680,35 @@
  
  #if defined(HAVE_VALGRIND) && !defined(NDEBUG)
  #  include <valgrind.h>
+--- a/src/util/anon_file.c
++++ b/src/util/anon_file.c
+@@ -136,8 +136,12 @@
+ 
+    path = getenv("XDG_RUNTIME_DIR");
+    if (!path) {
++#ifdef __HAIKU__
++      path = "/tmp";
++#else
+       errno = ENOENT;
+       return -1;
++#endif
+    }
+ 
+    if (debug_name)
+--- a/src/intel/vulkan/anv_gem.c
++++ b/src/intel/vulkan/anv_gem.c
+@@ -160,7 +160,11 @@
+ anv_gem_munmap(struct anv_device *device, void *p, uint64_t size)
+ {
+    VG(VALGRIND_FREELIKE_BLOCK(p, 0));
++#ifdef __HAIKU__
++   intel_haiku_unmap(p, size);
++#else
+    munmap(p, size);
++#endif
+ }
+ 
+ uint32_t
 --- a/src/vulkan/wsi/meson.build
 +++ b/src/vulkan/wsi/meson.build
 @@ -40,6 +40,10 @@
@@ -704,7 +733,14 @@
     result = wsi_wl_init_wsi(wsi, alloc, pdevice);
     if (result != VK_SUCCESS)
        goto fail;
-@@ -139,6 +139,12 @@
+@@ -133,12 +133,18 @@
+       goto fail;
+ #endif
+ 
+-#ifdef VK_USE_PLATFORM_DISPLAY_KHR
++#if defined(VK_USE_PLATFORM_DISPLAY_KHR) && !defined(VK_USE_PLATFORM_HAIKU)
+    result = wsi_display_init_wsi(wsi, alloc, display_fd);
+    if (result != VK_SUCCESS)
        goto fail;
  #endif
  
@@ -717,8 +753,12 @@
     present_mode = getenv("MESA_VK_WSI_PRESENT_MODE");
     if (present_mode) {
        if (!strcmp(present_mode, "fifo")) {
-@@ -183,7 +189,7 @@
- #ifdef VK_USE_PLATFORM_DISPLAY_KHR
+@@ -180,10 +186,10 @@
+ wsi_device_finish(struct wsi_device *wsi,
+                   const VkAllocationCallbacks *alloc)
+ {
+-#ifdef VK_USE_PLATFORM_DISPLAY_KHR
++#if defined(VK_USE_PLATFORM_DISPLAY_KHR) && !defined(VK_USE_PLATFORM_HAIKU)
     wsi_display_finish_wsi(wsi, alloc);
  #endif
 -#ifdef VK_USE_PLATFORM_WAYLAND_KHR
@@ -736,6 +776,20 @@
  }
  
  VKAPI_ATTR void VKAPI_CALL
+--- a/src/vulkan/wsi/wsi_common.h
++++ b/src/vulkan/wsi/wsi_common.h
+@@ -86,7 +86,11 @@
+ 
+ struct driOptionCache;
+ 
++#ifdef VK_USE_PLATFORM_HAIKU
++#define VK_ICD_WSI_PLATFORM_MAX (VK_ICD_WSI_PLATFORM_HEADLESS + 1)
++#else
+ #define VK_ICD_WSI_PLATFORM_MAX (VK_ICD_WSI_PLATFORM_DISPLAY + 1)
++#endif
+ 
+ struct wsi_device {
+    /* Allocator for the instance */
 --- a/src/vulkan/wsi/wsi_common_private.h
 +++ b/src/vulkan/wsi/wsi_common_private.h
 @@ -213,6 +213,12 @@
