@@ -14,20 +14,24 @@
 #include <Application.h>
 #include <GLView.h>
 #include <CheckBox.h>
+#include <GroupView.h>
 #include <LayoutBuilder.h>
+#include <OptionPopUp.h>
 #include <StringView.h>
 #include <Window.h>
 
 #include <GL/gl.h>
 #include <GL/glu.h>
 
+#include "CubeMessages.h"
+#include "VulkanCubeView.h"
+
 
 static bool sRequireHardware = false;
 static uint32 sFrameLimit = 0;
 static std::atomic<int> sExitCode(0);
+static renderer_mode sRendererMode = RENDERER_OPENGL;
 
-static const uint32 kStatistics = 'stat';
-static const uint32 kVerticalSync = 'vsyn';
 // Off by default, which is what this demo has always done: SwapBuffers()
 // without an argument does not wait for the retrace. The checkbox exists so
 // that a frame rate below the refresh rate can be shown not to be the display
@@ -228,6 +232,7 @@ CubeView::_Run()
 			message.AddString("renderer", fRenderer);
 			message.AddString("vendor", fVendor);
 			message.AddString("version", fVersion);
+			message.AddString("mode", "OpenGL");
 			fWindow.SendMessage(&message);
 			printf("%.1f completed frames/s, %.2f ms/frame, %u frames\n",
 				fps, average / 1000.0, totalFrames);
@@ -320,33 +325,78 @@ public:
 	virtual	bool				QuitRequested();
 
 private:
-			CubeView*			fView;
+			void				_SetRenderer(renderer_mode mode);
+			void				_StopRenderer();
+
+			BView*				fView;
+			BGroupView*		fRenderGroup;
 			BStringView*		fRendererView;
 			BStringView*		fRateView;
 			BCheckBox*			fVerticalSync;
+			BOptionPopUp*		fRendererSelector;
 };
 
 
 CubeWindow::CubeWindow()
 	:
-	BWindow(BRect(80, 80, 720, 560), "Intel OpenGL cube", B_TITLED_WINDOW,
+	BWindow(BRect(80, 80, 720, 560), "Intel graphics cube", B_TITLED_WINDOW,
 		B_QUIT_ON_WINDOW_CLOSE | B_AUTO_UPDATE_SIZE_LIMITS)
 {
-	fView = new CubeView();
-	fRendererView = new BStringView("renderer", "Asking the GL kit…");
+	fView = NULL;
+	fRenderGroup = new BGroupView("renderer view", B_VERTICAL, 0);
+	fRendererView = new BStringView("renderer", "Starting renderer…");
 	fRateView = new BStringView("rate", "Measuring…");
+	fRendererSelector = new BOptionPopUp("renderer selector", "Renderer:",
+		new BMessage(kRendererChanged));
+	fRendererSelector->AddOption("OpenGL", RENDERER_OPENGL);
+	fRendererSelector->AddOption("Vulkan", RENDERER_VULKAN);
+	fRendererSelector->SelectOptionFor(sRendererMode);
 	fVerticalSync = new BCheckBox("vsync", "Wait for vertical retrace",
 		new BMessage(kVerticalSync));
 	fVerticalSync->SetValue(sVerticalSync.load() ? B_CONTROL_ON : B_CONTROL_OFF);
 
 	BLayoutBuilder::Group<>(this, B_VERTICAL, 0)
-		.Add(fView)
+		.Add(fRenderGroup)
 		.AddGroup(B_VERTICAL, 2)
 			.SetInsets(8, 6, 8, 6)
 			.Add(fRendererView)
 			.Add(fRateView)
+			.Add(fRendererSelector)
 			.Add(fVerticalSync)
 			.End();
+	_SetRenderer(sRendererMode);
+}
+
+
+void
+CubeWindow::_StopRenderer()
+{
+	if (CubeView* view = dynamic_cast<CubeView*>(fView))
+		view->Stop();
+	else if (VulkanCubeView* view = dynamic_cast<VulkanCubeView*>(fView))
+		view->Stop();
+}
+
+
+void
+CubeWindow::_SetRenderer(renderer_mode mode)
+{
+	if (fView != NULL) {
+		_StopRenderer();
+		fRenderGroup->GroupLayout()->RemoveView(fView);
+		delete fView;
+	}
+	sRendererMode = mode;
+	fRendererView->SetText(mode == RENDERER_VULKAN
+		? "Starting Vulkan ANV…" : "Asking the GL kit…");
+	fRateView->SetText("Measuring…");
+	fVerticalSync->SetEnabled(mode == RENDERER_OPENGL);
+	if (mode == RENDERER_VULKAN) {
+		fView = new VulkanCubeView(sRequireHardware, sFrameLimit, &sExitCode);
+	} else
+		fView = new CubeView();
+	fRenderGroup->GroupLayout()->AddView(fView);
+	fRenderGroup->GroupLayout()->Relayout(true);
 }
 
 
@@ -357,17 +407,27 @@ CubeWindow::MessageReceived(BMessage* message)
 		sVerticalSync = fVerticalSync->Value() == B_CONTROL_ON;
 		return;
 	}
+	if (message->what == kRendererChanged) {
+		_SetRenderer((renderer_mode)fRendererSelector->Value());
+		return;
+	}
 	if (message->what != kStatistics) {
 		BWindow::MessageReceived(message);
 		return;
 	}
 
-	BString renderer, vendor, version;
+	BString renderer, vendor, version, mode, error;
 	float fps = 0;
 	int64 frame = 0;
 	message->FindString("renderer", &renderer);
 	message->FindString("vendor", &vendor);
 	message->FindString("version", &version);
+	message->FindString("mode", &mode);
+	if (message->FindString("error", &error) == B_OK) {
+		fRendererView->SetText(error);
+		fRateView->SetText("Vulkan renderer stopped");
+		return;
+	}
 	message->FindFloat("fps", &fps);
 	message->FindInt64("frame", &frame);
 
@@ -379,14 +439,15 @@ CubeWindow::MessageReceived(BMessage* message)
 		|| renderer.IFindFirst("software") >= 0;
 
 	BString text;
-	bool native = renderer.FindFirst("Iris / Haiku IntelGfx") >= 0;
+	bool vulkan = mode == "Vulkan";
+	bool native = vulkan || renderer.FindFirst("Iris / Haiku IntelGfx") >= 0;
 	text.SetToFormat("%s — %s (%s)", software ? "Software rasteriser"
 		: native ? "IntelGfx hardware rendering" : "Unverified renderer",
-		renderer.String(), vendor.String());
+		renderer.String(), vulkan ? "Vulkan" : vendor.String());
 	fRendererView->SetText(text);
 
-	text.SetToFormat("%.1f frames per second, %.2f ms per frame, GL %s",
-		fps, frame / 1000.0, version.String());
+	text.SetToFormat("%.1f frames per second, %.2f ms per frame, %s %s",
+		fps, frame / 1000.0, vulkan ? "Vulkan" : "GL", version.String());
 	fRateView->SetText(text);
 }
 
@@ -394,7 +455,7 @@ CubeWindow::MessageReceived(BMessage* message)
 bool
 CubeWindow::QuitRequested()
 {
-	fView->Stop();
+	_StopRenderer();
 	return BWindow::QuitRequested();
 }
 
@@ -407,6 +468,17 @@ main(int argc, char** argv)
 			sRequireHardware = true;
 		else if (strcmp(argv[i], "--vsync") == 0)
 			sVerticalSync = true;
+		else if (strcmp(argv[i], "--renderer") == 0 && i + 1 < argc) {
+			const char* renderer = argv[++i];
+			if (strcmp(renderer, "opengl") == 0)
+				sRendererMode = RENDERER_OPENGL;
+			else if (strcmp(renderer, "vulkan") == 0)
+				sRendererMode = RENDERER_VULKAN;
+			else {
+				fprintf(stderr, "Unknown renderer: %s\n", renderer);
+				return 2;
+			}
+		}
 		else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
 			char* end;
 			errno = 0;
@@ -417,8 +489,8 @@ main(int argc, char** argv)
 			}
 			sFrameLimit = count;
 		} else {
-			fprintf(stderr, "Usage: intel_gfx_cube [--require-hardware] [--vsync] "
-				"[--frames N]\n");
+			fprintf(stderr, "Usage: intel_gfx_cube [--renderer opengl|vulkan] "
+				"[--require-hardware] [--vsync] [--frames N]\n");
 			return 2;
 		}
 	}

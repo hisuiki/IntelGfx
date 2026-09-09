@@ -4,6 +4,15 @@ SubDirHdrs [ FDirName $(HAIKU_TOP) intel_gfx kernel ] ;
 UsePrivateHeaders graphics ;
 UsePrivateHeaders [ FDirName graphics common ] ;
 UsePrivateKernelHeaders ;
+
+UseHeaders $(INTEL_GFX_VULKAN_HEADER_DIR) : true ;
+Includes [ FGristFiles VulkanSmoke.cpp ] : $(INTEL_GFX_VULKAN_HEADERS) ;
+
+Application intel_gfx_vulkan_smoke :
+	VulkanSmoke.cpp
+	: be $(TARGET_LIBSTDC++) $(INTEL_GFX_VULKAN_LIBRARY)
+;
+
 KernelAddon intel_gfx_memory_test :
 	memory_driver.cpp RenderClient.cpp BufferObject.cpp
 	GlobalGTT.cpp PageTables.cpp RenderEngine.cpp kernel_cpp.cpp ;

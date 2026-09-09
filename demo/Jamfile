@@ -1,14 +1,19 @@
 SubDir HAIKU_TOP intel_gfx demo ;
 UseBuildFeatureHeaders glu ;
 UseBuildFeatureHeaders mesa ;
+UseHeaders $(INTEL_GFX_VULKAN_HEADER_DIR) : true ;
 
-Includes [ FGristFiles GpuCube.cpp ] :
+Includes [ FGristFiles GpuCube.cpp VulkanCubeView.cpp ] :
 	[ BuildFeatureAttribute glu : headers ]
 	[ BuildFeatureAttribute mesa : headers ] ;
+Includes [ FGristFiles GpuCube.cpp VulkanCubeView.cpp ] :
+	$(INTEL_GFX_VULKAN_HEADERS) ;
 
 Application intel_gfx_cube :
-	GpuCube.cpp
+	GpuCube.cpp VulkanCubeView.cpp
 	: be $(TARGET_LIBSTDC++)
+	[ TargetLibsupc++ ]
 	[ BuildFeatureAttribute glu : library ]
 	[ BuildFeatureAttribute mesa : library ]
+	$(INTEL_GFX_VULKAN_LIBRARY)
 ;

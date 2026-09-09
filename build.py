@@ -22,10 +22,14 @@ def main():
                         default=default_build)
     parser.add_argument('-j', '--jobs', type=int, default=4)
     parser.add_argument('--package', action='store_true')
+    parser.add_argument('--package-only', action='store_true',
+                        help='package existing build outputs without rebuilding')
     parser.add_argument('--mesa', action='store_true',
                         help='also build the Mesa Iris OpenGL renderer')
     parser.add_argument('--tests', action='store_true', help='also build kernel memory test fixture')
     args = parser.parse_args()
+    if args.package_only:
+        args.package = True
     build = args.haiku_build.resolve()
     if not (build / 'build/BuildConfig').is_file():
         parser.error('Haiku build directory must already be configured for x86_64')
@@ -48,24 +52,26 @@ def main():
     command = ['jam', f'-sJAMFILE={wrapper}', '-sHAIKU_IGNORE_USER_BUILD_CONFIG=1',
                f'-j{args.jobs}', 'intel_extreme', 'intel_extreme.accelerant',
                'IntelGfx', 'intel_gfx_ctl', 'intel_gfx_brightness_keys', 'intel_gfx_cube',
-               'intel_gfx_monitor']
+               'intel_gfx_vulkan_smoke', 'intel_gfx_monitor']
     if args.tests:
         command.append('intel_gfx_memory_test')
-    print('Building IntelGfx (log: %s)' % (out / 'build.log'), flush=True)
-    # Haiku's Jamrules build absolute paths out of $(PWD), which jam takes from
-    # the environment; running it in another directory does not change that by
-    # itself. The C locale keeps the log the same whoever runs the build.
     environment = dict(os.environ, LC_ALL='C', PWD=str(build))
-    with (out / 'build.log').open('w') as log:
-        result = subprocess.run(command, cwd=build, stdout=log,
-            stderr=subprocess.STDOUT, env=environment)
-    if result.returncode:
-        print('\n'.join((out / 'build.log').read_text().splitlines()[-100:]), file=sys.stderr)
-        return result.returncode
+    if not args.package_only:
+        print('Building IntelGfx (log: %s)' % (out / 'build.log'), flush=True)
+        # Haiku's Jamrules build absolute paths out of $(PWD), which jam takes
+        # from the environment; running it in another directory does not change
+        # that by itself. The C locale keeps the log reproducible.
+        with (out / 'build.log').open('w') as log:
+            result = subprocess.run(command, cwd=build, stdout=log,
+                stderr=subprocess.STDOUT, env=environment)
+        if result.returncode:
+            print('\n'.join((out / 'build.log').read_text().splitlines()[-100:]),
+                  file=sys.stderr)
+            return result.returncode
     mesa_renderer = project / 'out/mesa/Intel Gallium'
     mesa_vulkan = project / 'out/mesa/libvulkan_intel.so'
     mesa_icd = project / 'out/mesa/intel_icd.x86_64.json'
-    if args.mesa or args.package:
+    if (args.mesa or args.package) and not args.package_only:
         subprocess.run([
             sys.executable, project / 'mesa/build.py',
             '--haiku-build', build, f'-j{args.jobs}'
@@ -87,6 +93,9 @@ def main():
         (objects / 'input/intel_gfx_brightness_keys',
             'add-ons/input_server/filters/intel_gfx_brightness_keys'),
         (objects / 'demo/intel_gfx_cube', 'bin/intel_gfx_cube'),
+        (objects / 'demo/intel_gfx_cube', 'demos/IntelGfx Cube'),
+        (objects / 'tests/intel_gfx_vulkan_smoke',
+            'bin/intel_gfx_vulkan_smoke'),
         (objects / 'monitor/intel_gfx_monitor', 'bin/intel_gfx_monitor'),
         (project / 'README.md', 'documentation/packages/intel_gfx/README.md'),
         (project / 'UPSTREAM.json', 'documentation/packages/intel_gfx/UPSTREAM.json'),
@@ -104,6 +113,9 @@ def main():
     driver_link = stage / 'add-ons/kernel/drivers/dev/graphics/intel_extreme'
     driver_link.parent.mkdir(parents=True, exist_ok=True)
     driver_link.symlink_to('../../bin/intel_extreme')
+    demos_link = stage / 'data/deskbar/menu/Demos/IntelGfx Cube'
+    demos_link.parent.mkdir(parents=True, exist_ok=True)
+    demos_link.symlink_to('../../../../demos/IntelGfx Cube')
     shutil.copy2(project / 'package/PackageInfo', stage / '.PackageInfo')
     package = build / 'objects/linux/x86_64/release/tools/package/package'
     if sys.platform == 'haiku1':
@@ -112,7 +124,7 @@ def main():
         parser.error('package tool not built; build the Haiku package tool first')
     env = dict(environment)
     env['LD_LIBRARY_PATH'] = str(build / 'objects/linux/lib') + ':' + env.get('LD_LIBRARY_PATH', '')
-    hpkg = out / 'intel_gfx-0.3.5-1-x86_64.hpkg'
+    hpkg = out / 'intel_gfx-0.3.7-1-x86_64.hpkg'
     subprocess.run([str(package), 'create', '-C', str(stage), str(hpkg)],
                    check=True, env=env)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'],

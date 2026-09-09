@@ -1,5 +1,55 @@
 SubDir HAIKU_TOP intel_gfx ;
 
+# Vulkan is currently a runtime-only image package, so make its matching
+# development package available to the IntelGfx applications explicitly.
+if $(TARGET_PACKAGING_ARCH) = x86_64
+	&& $(HAIKU_BUILD_TYPE) != bootstrap {
+	local vulkanDevelFile = vulkan_devel-1.4.311-1-x86_64.hpkg ;
+	local vulkanRuntimeFile = vulkan-1.4.311-1-x86_64.hpkg ;
+	local vulkanDevelDownload = [ DownloadFile $(vulkanDevelFile) :
+		https://haikuports-repository.cdn.haiku-os.org/master/x86_64/current/packages/$(vulkanDevelFile) ] ;
+	local vulkanDevelPackage = <intel-gfx>intel-gfx-vulkan-devel.hpkg ;
+	MakeLocate $(vulkanDevelPackage) : $(HAIKU_DOWNLOAD_DIR) ;
+	Depends $(vulkanDevelPackage) : $(vulkanDevelDownload) ;
+
+	actions VerifyIntelGfxVulkanDevelPackage
+	{
+		actual=`$(HOST_SHA256) "$(2)" | sed 's/[[:space:]].*//'`
+		test "$actual" = 150716a3db7840910031519f7a2f247e42347afd4dd27f3c4735f18905b17da2 || {
+			echo "Vulkan development package checksum mismatch" >&2
+			exit 1
+		}
+		cp -f "$(2)" "$(1)"
+	}
+	VerifyIntelGfxVulkanDevelPackage $(vulkanDevelPackage) : $(vulkanDevelDownload) ;
+	local vulkanRuntimeDownload = [ DownloadFile $(vulkanRuntimeFile) :
+		https://haikuports-repository.cdn.haiku-os.org/master/x86_64/current/packages/$(vulkanRuntimeFile) ] ;
+	local vulkanRuntimePackage = <intel-gfx>intel-gfx-vulkan-runtime.hpkg ;
+	MakeLocate $(vulkanRuntimePackage) : $(HAIKU_DOWNLOAD_DIR) ;
+	Depends $(vulkanRuntimePackage) : $(vulkanRuntimeDownload) ;
+
+	actions VerifyIntelGfxVulkanRuntimePackage
+	{
+		actual=`$(HOST_SHA256) "$(2)" | sed 's/[[:space:]].*//'`
+		test "$actual" = d338597518dccd1dc4856080c0b3d8cd22fa1c3c81014b9f870eade2988ee6f2 || {
+			echo "Vulkan runtime package checksum mismatch" >&2
+			exit 1
+		}
+		cp -f "$(2)" "$(1)"
+	}
+	VerifyIntelGfxVulkanRuntimePackage $(vulkanRuntimePackage) : $(vulkanRuntimeDownload) ;
+
+	local vulkanDevelDir = [ FDirName $(HAIKU_OPTIONAL_BUILD_PACKAGES_DIR)
+		vulkan_devel-1.4.311-1-x86_64 ] ;
+	INTEL_GFX_VULKAN_HEADERS = [ ExtractArchive $(vulkanDevelDir) :
+		develop/headers : $(vulkanDevelPackage) : intel-gfx-vulkan-devel ] ;
+	local vulkanRuntimeDir = [ FDirName $(HAIKU_OPTIONAL_BUILD_PACKAGES_DIR)
+		vulkan-1.4.311-1-x86_64 ] ;
+	INTEL_GFX_VULKAN_LIBRARY = [ ExtractArchive $(vulkanRuntimeDir) :
+		lib/libvulkan.so.1.4.311 : $(vulkanRuntimePackage) : intel-gfx-vulkan-runtime ] ;
+	INTEL_GFX_VULKAN_HEADER_DIR = [ FDirName $(vulkanDevelDir) develop headers ] ;
+}
+
 SubInclude HAIKU_TOP intel_gfx kernel ;
 SubInclude HAIKU_TOP intel_gfx display ;
 SubInclude HAIKU_TOP intel_gfx server ;
@@ -20,6 +70,7 @@ Depends intel_gfx_binaries :
 	intel_gfx_ctl
 	intel_gfx_brightness_keys
 	intel_gfx_cube
+	intel_gfx_vulkan_smoke
 	intel_gfx_monitor
 ;
 

@@ -1,0 +1,3 @@
+resource app_signature "application/x-vnd.IntelGfx";
+
+resource app_flags B_EXCLUSIVE_LAUNCH | B_BACKGROUND_APP;

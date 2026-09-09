@@ -1,7 +1,7 @@
 SubDir HAIKU_TOP intel_gfx package ;
 
 local outDir = [ FDirName $(HAIKU_TOP) intel_gfx out ] ;
-local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.5-1-x86_64.hpkg" ] ;
+local hpkgTarget = [ FDirName $(outDir) "intel_gfx-0.3.7-1-x86_64.hpkg" ] ;
 
 local mesaDir = [ FDirName $(outDir) mesa ] ;
 local irisTarget = [ FDirName $(mesaDir) "Intel Gallium" ] ;
@@ -21,6 +21,7 @@ local server = [ FDirName $(objectsDir) server IntelGfx ] ;
 local ctl = [ FDirName $(objectsDir) tools intel_gfx_ctl ] ;
 local brightnessKeys = [ FDirName $(objectsDir) input intel_gfx_brightness_keys ] ;
 local cube = [ FDirName $(objectsDir) demo intel_gfx_cube ] ;
+local vulkanSmoke = [ FDirName $(objectsDir) tests intel_gfx_vulkan_smoke ] ;
 local monitor = [ FDirName $(objectsDir) monitor intel_gfx_monitor ] ;
 
 local packageTool = [ FDirName $(HAIKU_OUTPUT_DIR) objects linux $(HOST_ARCH) release tools package package ] ;
@@ -41,6 +42,8 @@ actions BuildIntelGfxPackage
 	mkdir -p "$STAGE/add-ons/accelerants"
 	mkdir -p "$STAGE/servers"
 	mkdir -p "$STAGE/bin"
+	mkdir -p "$STAGE/demos"
+	mkdir -p "$STAGE/data/deskbar/menu/Demos"
 	mkdir -p "$STAGE/add-ons/input_server/filters"
 	mkdir -p "$STAGE/documentation/packages/intel_gfx"
 	mkdir -p "$STAGE/data/licenses"
@@ -56,21 +59,25 @@ actions BuildIntelGfxPackage
 	cp -f "$(2[4])" "$STAGE/bin/intel_gfx_ctl"
 	cp -f "$(2[5])" "$STAGE/add-ons/input_server/filters/intel_gfx_brightness_keys"
 	cp -f "$(2[6])" "$STAGE/bin/intel_gfx_cube"
-	cp -f "$(2[7])" "$STAGE/bin/intel_gfx_monitor"
-	cp -f "$(2[8])" "$STAGE/documentation/packages/intel_gfx/README.md"
-	cp -f "$(2[9])" "$STAGE/documentation/packages/intel_gfx/UPSTREAM.json"
-	cp -f "$(2[10])" "$STAGE/data/licenses/IntelGfx"
-	cp -f "$(2[11])" "$STAGE/add-ons/opengl/Intel Gallium"
-	cp -f "$(2[12])" "$STAGE/lib/libvulkan_intel.so"
-	cp -f "$(2[13])" "$STAGE/add-ons/vulkan/icd.d/intel_icd.x86_64.json"
-	cp -f "$(2[14])" "$STAGE/.PackageInfo"
-	cp -f "$(2[15])" "$STAGE/data/launch/intel_gfx"
+	cp -f "$(2[6])" "$STAGE/demos/IntelGfx Cube"
+	ln -s "../../../../demos/IntelGfx Cube" \
+		"$STAGE/data/deskbar/menu/Demos/IntelGfx Cube"
+	cp -f "$(2[7])" "$STAGE/bin/intel_gfx_vulkan_smoke"
+	cp -f "$(2[8])" "$STAGE/bin/intel_gfx_monitor"
+	cp -f "$(2[9])" "$STAGE/documentation/packages/intel_gfx/README.md"
+	cp -f "$(2[10])" "$STAGE/documentation/packages/intel_gfx/UPSTREAM.json"
+	cp -f "$(2[11])" "$STAGE/data/licenses/IntelGfx"
+	cp -f "$(2[12])" "$STAGE/add-ons/opengl/Intel Gallium"
+	cp -f "$(2[13])" "$STAGE/lib/libvulkan_intel.so"
+	cp -f "$(2[14])" "$STAGE/add-ons/vulkan/icd.d/intel_icd.x86_64.json"
+	cp -f "$(2[15])" "$STAGE/.PackageInfo"
+	cp -f "$(2[16])" "$STAGE/data/launch/intel_gfx"
 
-	PKG_TOOL="$(2[16])"
+	PKG_TOOL="$(2[17])"
 	if [ ! -f "$PKG_TOOL" ]; then
 		PKG_TOOL="/boot/system/bin/package"
 	fi
-	LD_LIBRARY_PATH="$(2[17]):$LD_LIBRARY_PATH" "$PKG_TOOL" create -C "$STAGE" "$(1)"
+	LD_LIBRARY_PATH="$(2[18]):$LD_LIBRARY_PATH" "$PKG_TOOL" create -C "$STAGE" "$(1)"
 	echo "Created $(1)"
 }
 
@@ -81,6 +88,7 @@ BuildIntelGfxPackage $(hpkgTarget) :
 	$(ctl)
 	$(brightnessKeys)
 	$(cube)
+	$(vulkanSmoke)
 	$(monitor)
 	$(readme)
 	$(upstream)
@@ -100,6 +108,7 @@ Depends $(server) : IntelGfx ;
 Depends $(ctl) : intel_gfx_ctl ;
 Depends $(brightnessKeys) : intel_gfx_brightness_keys ;
 Depends $(cube) : intel_gfx_cube ;
+Depends $(vulkanSmoke) : intel_gfx_vulkan_smoke ;
 Depends $(monitor) : intel_gfx_monitor ;
 Depends $(hpkgTarget) : intel_gfx_mesa ;
 

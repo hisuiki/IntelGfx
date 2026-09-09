@@ -688,10 +688,22 @@ RenderClient::_NativeIoctl(uint32 operation, void* userBuffer, size_t length)
 						}
 					}
 				}
-				ActivityClient& entry = request.clients[request.count++];
-				entry.team = client->fTeam;
-				entry.contexts = contexts;
-				entry.ticks = ticks;
+				// A process can open the render node more than once (Vulkan does
+				// this routinely). Report one accumulated entry per team so every
+				// consumer sees processes rather than driver file handles.
+				ActivityClient* entry = NULL;
+				for (uint32 j = 0; j < request.count; j++) {
+					if (request.clients[j].team == client->fTeam) {
+						entry = &request.clients[j];
+						break;
+					}
+				}
+				if (entry == NULL) {
+					entry = &request.clients[request.count++];
+					entry->team = client->fTeam;
+				}
+				entry->contexts += contexts;
+				entry->ticks += ticks;
 			}
 			return user_memcpy(userBuffer, &request, sizeof(request));
 		}

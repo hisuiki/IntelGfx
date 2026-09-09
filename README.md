@@ -6,8 +6,9 @@ including HD Graphics 530 and HD Graphics 610.
 
 The package contains a kernel rendering ABI, a Mesa 22.0.5 Iris Gallium
 renderer named `Intel Gallium`, Intel Vulkan ANV with a native Haiku WSI,
-diagnostics, and an updated OpenGL cube. It is the single source and package
-for Haiku's `intel_extreme` kernel driver and display accelerant.
+diagnostics, and a cube that can switch between OpenGL and Vulkan. It is the
+single source and package for Haiku's `intel_extreme` kernel driver and display
+accelerant.
 
 The implementation now provides the pieces Iris needs:
 
@@ -25,8 +26,8 @@ The implementation now provides the pieces Iris needs:
 
 This has run on the target hardware. On a ThinkPad P50's Skylake GT2
 (8086:191b) the blitter and render engines both pass `submit-test`, the native
-ABI passes `native-test`, ANV creates and idles an Intel Vulkan logical device,
-and `intel_gfx_cube` draws with
+ABI passes `native-test`, ANV submits and reads back Vulkan transfer and graphics
+work, and `intel_gfx_cube` draws with
 `Mesa Intel(R) HD Graphics 530 (SKL GT2) (Iris / Haiku IntelGfx)` for thousands
 of frames without faulting. It renders at roughly 1050 frames per second, and
 at 59.7 with the cube's vertical sync box ticked, which is the panel. It began
@@ -88,7 +89,7 @@ python3 intel_gfx/mesa/build.py --haiku-build generated.x86_64 --clean
 ```
 
 Outputs are placed below `intel_gfx/out/`. The package is
-`intel_gfx-0.3.5-1-x86_64.hpkg`; the stripped renderer is also available as
+`intel_gfx-0.3.7-1-x86_64.hpkg`; the stripped renderer is also available as
 `out/mesa/Intel Gallium`.
 
 ## Install
@@ -96,7 +97,9 @@ Outputs are placed below `intel_gfx/out/`. The package is
 When built as the `intel_gfx` submodule of Haiku, `intel_gfx.hpkg` is included
 in x86_64 images and installed by default. It owns the canonical
 `intel_extreme` driver, `intel_extreme.accelerant`, Iris OpenGL renderer, and
-ANV Vulkan ICD; no activation step or user command is used. The HPKG owns the
+ANV Vulkan ICD; no activation step or user command is used. The cube is
+installed as `IntelGfx Cube` in the Deskbar Demos menu, while
+`intel_gfx_cube` remains available for command-line tests. The HPKG owns the
 Iris add-on in the normal system add-on directory. At boot its launch service
 registers a symlink in the higher-priority system non-packaged search tier,
 because Haiku's current OpenGL roster otherwise selects Software Pipe before a
@@ -108,7 +111,7 @@ For a standalone test build, copy the HPKG to `/boot/system/packages/` and
 reboot:
 
 ```sh
-pkgman install ./intel_gfx-0.3.5-1-x86_64.hpkg
+pkgman install ./intel_gfx-0.3.7-1-x86_64.hpkg
 reboot
 ```
 
@@ -122,7 +125,9 @@ intel_gfx_ctl info /dev/graphics/intel_extreme_000200
 intel_gfx_ctl buffer-test /dev/graphics/intel_extreme_000200
 intel_gfx_ctl gtt-test /dev/graphics/intel_extreme_000200
 intel_gfx_ctl native-test /dev/graphics/intel_extreme_000200
-intel_gfx_cube --require-hardware --frames 600
+intel_gfx_vulkan_smoke
+intel_gfx_cube --renderer opengl --require-hardware --frames 600
+intel_gfx_cube --renderer vulkan --require-hardware --frames 600
 ```
 
 The packaged `IntelGfx` discovery service is registered with Haiku's system
@@ -139,11 +144,15 @@ then checks the fence and the value written by the GPU. A timeout faults the
 physical render scheduler and quarantines that client's mappings; reboot
 before trying again.
 
-The cube prints the GL vendor, version, and renderer, measures completed frames
-with `glFinish`, and reads pixels from its first frame to catch a renderer that
-submits without drawing. `--require-hardware` exits with failure unless the
-renderer identifies itself as `Iris / Haiku IntelGfx`; `--frames N` makes a
-bounded test suitable for a terminal or script.
+The cube has a renderer selector for changing between OpenGL and Vulkan without
+restarting. Both modes print the API version and renderer, measure completed
+GPU work, and read pixels from their first frame to catch a renderer that
+submits without drawing. Vulkan renders into an ANV image, copies it to
+host-visible memory, and displays that result through a regular Haiku view;
+this deliberately tests graphics-pipeline submission and readback while native
+Vulkan window presentation is still being developed. `--require-hardware`
+rejects a software or non-Intel renderer, and `--frames N` makes either mode a
+bounded terminal test.
 
 `intel_gfx_monitor` graphs what the GPU and the processor are each doing on
 one time base, sampling five times a second. The GPU line is derived from the
@@ -238,9 +247,11 @@ the unified display path but cannot select these renderers.
 There is no GPU reset or replay after a hang. Interrupt-driven scheduling,
 parallel engine queues, eviction, sparse unbinding, PRIME sharing, direct
 presentation, suspend/resume validation, and broader Intel generations are
-not implemented. The Vulkan path includes a Haiku WSI and now passes instance,
-physical-device, logical-device, and idle/destroy lifecycle testing on Skylake;
-presentation and conformance testing remain outstanding.
+not implemented. The Vulkan path includes a preliminary headless Haiku WSI and
+now passes instance, device, command-buffer, transfer, graphics-pipeline, image
+readback, and lifecycle testing on Skylake. The cube presents the read-back
+image through the Interface Kit; direct Vulkan-to-window presentation and
+conformance testing remain outstanding.
 
 ## Roll back
 
