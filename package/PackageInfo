@@ -1,5 +1,5 @@
 name intel_gfx
-version 0.3.3-1
+version 0.3.4-1
 architecture x86_64
 summary "Experimental Intel display, Iris OpenGL, and Vulkan ANV graphics driver"
 description "Unified Intel display and rendering stack for Haiku. It includes the intel_extreme kernel driver and accelerant, isolated GPU contexts, native command submission, Mesa Iris OpenGL, Intel Vulkan ANV with Haiku WSI, a device service, and diagnostics."
@@ -11,10 +11,10 @@ copyrights {
 }
 licenses { "IntelGfx" }
 provides {
-	intel_gfx = 0.3.3
+	intel_gfx = 0.3.4
 	mesa_iris = 22.0.5
 	mesa_vulkan_intel = 22.0.5
-	cmd:intel_gfx_ctl = 0.3.3
+	cmd:intel_gfx_ctl = 0.3.4
 }
 requires {
 	haiku
