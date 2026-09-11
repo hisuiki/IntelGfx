@@ -17,6 +17,11 @@ static const uint32 kFenceOffset = 0x100;		// eight byte aligned, bit 5 clear
 static const bigtime_t kForcewakeTimeout = 50000;
 static const bigtime_t kIdleTimeout = 1000000;
 static const bigtime_t kSpinTimeout = 2000;
+// How long to spin for a context save before sleeping. The save follows the
+// fence by microseconds; this only needs to outlast that, not a whole batch.
+static const bigtime_t kSaveSpinTimeout = 200;
+// Entries in the context status buffer the engine writes on each switch.
+static const uint32 kStatusBufferEntries = 6;
 
 // Index of the values this driver fills in, in dwords into the register
 // image. They follow from the layout below and match i915's names for them.
@@ -446,22 +451,36 @@ RenderEngine::InitClient(GlobalGTT& gtt, RenderEngine& scheduler,
 status_t
 RenderEngine::_WaitContextSaved(bigtime_t timeout)
 {
-	bigtime_t deadline = system_time() + timeout;
+	bigtime_t start = system_time();
+	bigtime_t deadline = start + timeout;
+	bigtime_t spinUntil = start + kSaveSpinTimeout;
 	uint32 id = (uint32)(fContext.GraphicsAddress() >> 12);
 	const volatile uint32* csb = (const volatile uint32*)fStatusPage.Address()
 		+ kStatusBufferIndex;
-	do {
-		FlushCpuCache(fStatusPage.Address(), B_PAGE_SIZE);
-		for (uint32 i = 0; i < 6; i++) {
+	while (true) {
+		// Only the six status entries are read, and they share one cache
+		// line; writing back the rest of the page on every poll was most of
+		// what this loop cost.
+		FlushCpuCache((const void*)csb, kStatusBufferEntries * 2 * sizeof(uint32));
+		for (uint32 i = 0; i < kStatusBufferEntries; i++) {
 			// Gen8-10 CSB: ACTIVE_IDLE plus COMPLETE means the context's
 			// image has been saved, not just that its fence command ran.
 			if ((csb[2 * i] & ((1 << 3) | (1 << 4)))
 					== ((1 << 3) | (1 << 4)) && csb[2 * i + 1] == id)
 				return B_OK;
 		}
-		snooze(50);
-	} while (system_time() < deadline);
-	return B_TIMED_OUT;
+		bigtime_t now = system_time();
+		if (now >= deadline)
+			return B_TIMED_OUT;
+		// The save completes a few microseconds after the fence the caller
+		// has just seen, so the first poll nearly always misses it by very
+		// little. Sleeping then costs a whole scheduler wakeup -- measured at
+		// about 55us on every submission -- so spin briefly before sleeping.
+		if (now < spinUntil)
+			spin(1);
+		else
+			snooze(50);
+	}
 }
 
 
@@ -562,6 +581,65 @@ RenderEngine::_UpdateTail(uint32 tail)
 }
 
 
+// Where the time inside a submission goes, summed per engine and written to
+// the syslog every couple of seconds while work is arriving. A submission is
+// synchronous, so its wall time is everything a client's rendering thread
+// spends in the driver; splitting it shows how much of that is the GPU doing
+// the work and how much is this driver's own overhead around it, which no
+// whole-process profile can tell apart. Off by default because it logs for as
+// long as anything draws; build with INTEL_GFX_PROFILE_SUBMIT=1 to measure.
+#ifndef INTEL_GFX_PROFILE_SUBMIT
+#	define INTEL_GFX_PROFILE_SUBMIT 0
+#endif
+
+#if INTEL_GFX_PROFILE_SUBMIT
+namespace {
+struct SubmitProfile {
+	bigtime_t	lastReport;
+	uint32		count;
+	bigtime_t	lock;		// waiting for another context's submission
+	bigtime_t	previous;	// this context's last batch still finishing
+	bigtime_t	prepare;	// forcewake, cache flushes, ring and port writes
+	bigtime_t	execute;	// the batch running on the GPU
+	bigtime_t	save;		// the engine saving the context afterwards
+	bigtime_t	finish;		// reading the image back, releasing forcewake
+};
+SubmitProfile sSubmitProfile[2];
+
+void
+RecordSubmit(bool render, bigtime_t entered, bigtime_t locked,
+	bigtime_t previous, bigtime_t submitted, bigtime_t executed,
+	bigtime_t saved, bigtime_t done)
+{
+	SubmitProfile& p = sSubmitProfile[render ? 1 : 0];
+	p.count++;
+	p.lock += locked - entered;
+	p.previous += previous - locked;
+	p.prepare += submitted - previous;
+	p.execute += executed - submitted;
+	p.save += saved - executed;
+	p.finish += done - saved;
+
+	bigtime_t window = done - p.lastReport;
+	if (window < 2000000)
+		return;
+	if (p.lastReport != 0 && p.count != 0) {
+		dprintf("intel_gfx: %s %" B_PRIu32 " submits in %" B_PRIdBIGTIME
+			" ms, per submit us: lock %" B_PRIdBIGTIME " previous %"
+			B_PRIdBIGTIME " prepare %" B_PRIdBIGTIME " execute %"
+			B_PRIdBIGTIME " save %" B_PRIdBIGTIME " finish %"
+			B_PRIdBIGTIME "\n", render ? "render" : "blitter", p.count,
+			window / 1000, p.lock / p.count, p.previous / p.count,
+			p.prepare / p.count, p.execute / p.count, p.save / p.count,
+			p.finish / p.count);
+	}
+	memset(&p, 0, sizeof(p));
+	p.lastReport = done;
+}
+}
+#endif
+
+
 status_t
 RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 {
@@ -570,7 +648,13 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	if (batchLength == 0 || (batchAddress & 0x3) != 0)
 		return B_BAD_VALUE;
 
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t entered = system_time();
+#endif
 	MutexLocker locker(&fScheduler->fLock);
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t locked = system_time();
+#endif
 
 	if (fScheduler->fFaulted || fFaulted)
 		return B_DEV_NOT_READY;
@@ -585,14 +669,23 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		if (status != B_OK)
 			return status;
 	}
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t previous = system_time();
+#endif
 
 	status_t status = _Forcewake(true);
 	if (status != B_OK) {
 		_Forcewake(false);
 		return status;
 	}
-	// Fetch the context image the GPU saved before changing its tail.
-	FlushCpuCache(fContext.Address(), fContext.Size());
+	// Fetch the register image the GPU saved before changing its tail. That
+	// one page is all of the context this processor reads or writes after
+	// initialisation; the rest is engine state only the GPU touches, so it
+	// holds no lines this processor could have dirtied and has nothing to
+	// fetch. Flushing the whole image instead -- 24 pages on the render
+	// engine, twice per submission -- was most of the time a submission spent
+	// in this driver rather than on the GPU.
+	FlushCpuCache(fRegisterState, B_PAGE_SIZE);
 	if (fNextSeqno > 1)
 		fRegisterState[kStateContextControl]
 			= Masked(kContextControlRestoreInhibit, false)
@@ -607,8 +700,10 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		uint32* pad = (uint32*)((uint8*)fRing.Address() + fRingTail);
 		for (uint32 i = 0; i < (fRingSize - fRingTail) / 4; i++)
 			pad[i] = kMiNoop;
+		FlushCpuCache(pad, fRingSize - fRingTail);
 		fRingTail = 0;
 	}
+	uint32 writeStart = fRingTail;
 
 	fAddressSpace->Flush();
 	uint32 seqno = fNextSeqno++;
@@ -668,7 +763,9 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		ring[at++] = kMiNoop;
 
 	fRingTail = (fRingTail + kCommandDwords * 4) % fRingSize;
-	FlushCpuCache(fRing.Address(), fRing.Size());
+	// Only the commands just written need to reach memory; the rest of the
+	// ring is either already there or padding flushed when it was written.
+	FlushCpuCache((uint8*)fRing.Address() + writeStart, kCommandDwords * 4);
 	_UpdateTail(fRingTail);
 
 	// The descriptor names the context image and how it is addressed; the
@@ -692,15 +789,24 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 	_Write(fEngine->base + kRingExeclistSubmitPort, 0);
 	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)(descriptor >> 32));
 	_Write(fEngine->base + kRingExeclistSubmitPort, (uint32)descriptor);
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t submitted = system_time();
+#endif
 
 	status = _WaitSeqno(seqno, kIdleTimeout);
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t executed = system_time();
+#endif
 	if (status == B_OK)
 		status = _WaitContextSaved(kIdleTimeout);
+#if INTEL_GFX_PROFILE_SUBMIT
+	bigtime_t saved = system_time();
+#endif
 	if (status == B_OK) {
 		// The engine has saved its image, so the timestamp inside it is the
 		// one it stopped at. The difference since the last submission is the
 		// time the hardware spent running this context and nothing else.
-		FlushCpuCache(fContext.Address(), fContext.Size());
+		FlushCpuCache(fRegisterState, B_PAGE_SIZE);
 		uint32 timestamp = fRegisterState[kStateTimestamp];
 		uint32 elapsed = timestamp - fLastTimestamp;
 		fLastTimestamp = timestamp;
@@ -713,6 +819,10 @@ RenderEngine::Submit(uint64 batchAddress, uint32 batchLength, uint64& _fence)
 		fScheduler->fFaulted = true;
 		return status;
 	}
+#if INTEL_GFX_PROFILE_SUBMIT
+	RecordSubmit(fEngine->usesPipeControl, entered, locked, previous,
+		submitted, executed, saved, system_time());
+#endif
 
 	_fence = seqno;
 	return B_OK;

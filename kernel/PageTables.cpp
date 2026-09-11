@@ -26,7 +26,8 @@ PageTables::PageTables()
 	fTableCount(0),
 	fRoot(0),
 	fScratchArea(-1),
-	fScratchPage(0)
+	fScratchPage(0),
+	fDirty(true)
 {
 	memset(fTables, 0, sizeof(fTables));
 	memset(&fTop, 0, sizeof(fTop));
@@ -212,6 +213,10 @@ PageTables::Map(area_id area, uint64 address)
 		return B_BAD_VALUE;
 
 	MutexLocker locker(&fLock);
+	// Set before any entry is written rather than after the last one: a walk
+	// may create intermediate tables and the call still fail partway, and
+	// those writes have to reach memory as well.
+	fDirty = true;
 	for (uint64 offset = 0; offset < size; offset += B_PAGE_SIZE) {
 		physical_entry entry;
 		status = get_memory_map((void*)((addr_t)info.address + offset),
@@ -247,6 +252,10 @@ PageTables::MapPhysical(uint64 address, phys_addr_t physical, uint64 size)
 		return B_BAD_VALUE;
 
 	MutexLocker locker(&fLock);
+	// Set before any entry is written rather than after the last one: a walk
+	// may create intermediate tables and the call still fail partway, and
+	// those writes have to reach memory as well.
+	fDirty = true;
 	for (uint64 offset = 0; offset < size; offset += B_PAGE_SIZE) {
 		if (((uint64)(physical + offset) & ~kPageEntryAddressMask) != 0)
 			return B_BAD_ADDRESS;
@@ -281,6 +290,10 @@ PageTables::Unmap(uint64 address, uint64 size)
 		| kPageEntryWritable;
 
 	MutexLocker locker(&fLock);
+	// Set before any entry is written rather than after the last one: a walk
+	// may create intermediate tables and the call still fail partway, and
+	// those writes have to reach memory as well.
+	fDirty = true;
 	for (uint64 offset = 0; offset < size; offset += B_PAGE_SIZE) {
 		Table pageTable;
 		uint32 index;
@@ -297,8 +310,16 @@ void
 PageTables::Flush()
 {
 	MutexLocker locker(&fLock);
+	// Every table this client owns is written back before each submission,
+	// so the GPU never walks an entry that is still only in this processor's
+	// cache. When nothing has been mapped or unmapped since the last flush
+	// there is nothing new to write back -- and a client with many buffers has
+	// many tables, all of which were being written back on every submission.
+	if (!fDirty)
+		return;
 	for (uint32 i = 0; i < fTableCount; i++)
 		FlushCpuCache(fTables[i].entries, B_PAGE_SIZE);
+	fDirty = false;
 }
 
 }

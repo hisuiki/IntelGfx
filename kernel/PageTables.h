@@ -59,6 +59,10 @@ private:
 	phys_addr_t fRoot;
 	area_id fScratchArea;
 	phys_addr_t fScratchPage;
+	// Whether any entry has been written since the tables were last flushed
+	// to memory. Flush runs before every submission, but in a steady frame
+	// nothing has been mapped or unmapped since the last one.
+	bool fDirty;
 	mutex fLock;
 };
 
