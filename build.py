@@ -131,7 +131,29 @@ def main():
         parser.error('package tool not built; build the Haiku package tool first')
     env = dict(environment)
     env['LD_LIBRARY_PATH'] = str(build / 'objects/linux/lib') + ':' + env.get('LD_LIBRARY_PATH', '')
-    hpkg = out / 'intel_gfx-0.3.7-1-x86_64.hpkg'
+    # Name the file after the version the package actually declares. Hardcoding
+    # it meant a version bump in PackageInfo produced an hpkg still carrying the
+    # old version in its name, which then installs as an update of nothing and
+    # is indistinguishable on disk from the build before it.
+    version = None
+    for line in (project / 'package/PackageInfo').read_text().splitlines():
+        if line.startswith('version'):
+            version = line.split(None, 1)[1].strip().strip('"')
+            break
+    if version is None:
+        parser.error('package/PackageInfo declares no version')
+    # The solver resolves dependencies against what a package provides, not
+    # its version line, so a bump that leaves these behind makes the package
+    # unable to satisfy anything asking for the release it claims to be.
+    release = version.split('-')[0]
+    stale = [line.strip() for line in
+             (project / 'package/PackageInfo').read_text().splitlines()
+             if line.strip().startswith(('intel_gfx =', 'cmd:intel_gfx'))
+             and line.split('=', 1)[1].strip() != release]
+    if stale:
+        parser.error('PackageInfo provides do not match version %s: %s'
+                     % (release, ', '.join(stale)))
+    hpkg = out / ('intel_gfx-%s-x86_64.hpkg' % version)
     subprocess.run([str(package), 'create', '-C', str(stage), str(hpkg)],
                    check=True, env=env)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
