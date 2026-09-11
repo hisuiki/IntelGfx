@@ -71,6 +71,8 @@ def main():
     mesa_renderer = project / 'out/mesa/Intel Gallium'
     mesa_vulkan = project / 'out/mesa/libvulkan_intel.so'
     mesa_icd = project / 'out/mesa/intel_icd.x86_64.json'
+    mesa_egl = project / 'out/mesa/libEGL.so.1.0.0'
+    mesa_gles2 = project / 'out/mesa/libGLESv2.so.2.0.0'
     if (args.mesa or args.package) and not args.package_only:
         subprocess.run([
             sys.executable, project / 'mesa/build.py',
@@ -104,6 +106,11 @@ def main():
         (mesa_renderer, 'add-ons/opengl/Intel Gallium'),
         (mesa_vulkan, 'lib/libvulkan_intel.so'),
         (mesa_icd, 'add-ons/vulkan/icd.d/intel_icd.x86_64.json'),
+        # Installed package-private: the mesa package already owns these names
+        # in lib/. The IntelGfx server symlinks them into the non-packaged tier
+        # at boot so they take priority, and drops the links when it stops.
+        (mesa_egl, 'lib/intelgfx/libEGL.so.1.0.0'),
+        (mesa_gles2, 'lib/intelgfx/libGLESv2.so.2.0.0'),
     ]
     for source, destination in file_pairs:
         if source.is_file():

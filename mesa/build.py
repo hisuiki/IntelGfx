@@ -29,6 +29,51 @@ def package(build: Path, name: str) -> Path:
     return matches[-1]
 
 
+EGL_HAIKU_MESON = """elif with_platform_haiku
+  # The Haiku EGL driver renders through the IntelGfx Iris Gallium screen, so
+  # it links the same state tracker the BGLView renderer add-on uses. It must
+  # not link libgl: that is Haiku's OpenGL Kit (BGLView plus the renderer
+  # roster), a separate path that would build its own unrelated GL contexts.
+  incs_for_egl += [inc_haikugl, inc_intelgfx]
+  c_args_for_egl += [
+    '-D_EGL_BUILT_IN_DRIVER_HAIKU',
+  ]
+  cpp_args_for_egl += ['-std=c++17']
+  files_egl += files('drivers/haiku/egl_haiku.cpp')
+  link_for_egl += [libintelgfx_screen, link_intelgfx]
+  deps_for_egl += deps_intelgfx
+"""
+
+EGL_HAIKU_MESON_ORIGINAL = """elif with_platform_haiku
+  incs_for_egl += inc_haikugl
+  c_args_for_egl += [
+    '-D_EGL_BUILT_IN_DRIVER_HAIKU',
+  ]
+  files_egl += files('drivers/haiku/egl_haiku.cpp')
+  link_for_egl += libgl
+  deps_for_egl += cpp.find_library('be')
+"""
+
+
+def enable_egl_backend(source: Path) -> None:
+    """Point Mesa's Haiku EGL platform at the IntelGfx Iris screen.
+
+    Upstream builds libEGL against Haiku's OpenGL Kit, which the rewritten
+    driver does not use. Applied in place rather than as a patch hunk because
+    the source tree is only re-extracted when the archive or patch fingerprint
+    changes, so this has to be idempotent across incremental builds.
+    """
+    path = source / "src/egl/meson.build"
+    text = path.read_text()
+    if EGL_HAIKU_MESON in text:
+        return
+    if EGL_HAIKU_MESON_ORIGINAL not in text:
+        raise RuntimeError(
+            "src/egl/meson.build does not contain the expected Haiku platform "
+            "block; the Mesa version or patchset changed")
+    path.write_text(text.replace(EGL_HAIKU_MESON_ORIGINAL, EGL_HAIKU_MESON, 1))
+
+
 def main() -> int:
     here = Path(__file__).resolve().parent
     intel_gfx = here.parent
@@ -87,6 +132,9 @@ def main() -> int:
                  source / "src/intel/common/intel_haiku.h")
     shutil.copy2(here / "overlay/wsi/wsi_common_haiku.c",
                  source / "src/vulkan/wsi/wsi_common_haiku.c")
+    shutil.copy2(here / "overlay/egl/egl_haiku.cpp",
+                 source / "src/egl/drivers/haiku/egl_haiku.cpp")
+    enable_egl_backend(source)
 
     regular = (build / "objects/haiku/x86_64/packaging/packages_build/regular")
     devel = regular / "hpkg_-haiku_devel.hpkg/contents"
@@ -157,8 +205,8 @@ def main() -> int:
     options = [
         "-Dplatforms=haiku", "-Dgallium-drivers=iris", "-Dvulkan-drivers=intel",
         "-Ddri-drivers=", "-Dllvm=disabled", "-Dshared-llvm=disabled",
-        "-Dglx=disabled", "-Degl=disabled", "-Dgles1=disabled",
-        "-Dgles2=disabled", "-Dgbm=disabled", "-Dlibunwind=disabled",
+        "-Dglx=disabled", "-Degl=enabled", "-Dgles1=enabled",
+        "-Dgles2=enabled", "-Dgbm=disabled", "-Dlibunwind=disabled",
         "-Dzstd=disabled", "-Dlmsensors=disabled", "-Dbuild-tests=false",
         "-Dglvnd=false", "-Dvalgrind=disabled", "-Dbuildtype=debugoptimized",
     ]
@@ -166,13 +214,26 @@ def main() -> int:
         run([meson, "setup", mesa_build, source, "--cross-file", cross] + options,
             env=environment)
     else:
-        run([meson, "setup", "--reconfigure", mesa_build, source],
-            env=environment)
+        # Options have to be repeated here: meson keeps the previous values for
+        # anything --reconfigure is not told about, so dropping them would
+        # silently build with a stale configuration after this file changes.
+        run([meson, "setup", "--reconfigure", mesa_build, source,
+             "--cross-file", cross] + options, env=environment)
+    # libEGL and the GLES dispatch libraries carry a soversion, so each one is
+    # installed as the real file plus the two symlinks a consumer links against.
+    versioned = [
+        ("src/egl/libEGL.so.1.0.0", "libEGL.so.1.0.0",
+            ["libEGL.so.1", "libEGL.so"]),
+        ("src/mapi/es2api/libGLESv2.so.2.0.0", "libGLESv2.so.2.0.0",
+            ["libGLESv2.so.2", "libGLESv2.so"]),
+        ("src/mapi/es1api/libGLESv1_CM.so.1.1.0", "libGLESv1_CM.so.1.1.0",
+            ["libGLESv1_CM.so.1", "libGLESv1_CM.so"]),
+    ]
     targets = [
         "src/gallium/targets/haiku-iris/libhaiku-iris.so",
         "src/intel/vulkan/libvulkan_intel.so",
         "src/intel/vulkan/intel_icd.x86_64.json",
-    ]
+    ] + [built for built, _, _ in versioned]
     run(["ninja", "-C", mesa_build, f"-j{args.jobs}"] + targets, env=environment)
     strip_tool = f"{toolchain}strip"
     result = out / "Intel Gallium"
@@ -181,6 +242,18 @@ def main() -> int:
     vk_result = out / "libvulkan_intel.so"
     shutil.copy2(mesa_build / "src/intel/vulkan/libvulkan_intel.so", vk_result)
     run([strip_tool, str(vk_result)])
+    egl_results = []
+    for built, name, links in versioned:
+        target = out / name
+        shutil.copy2(mesa_build / built, target)
+        run([strip_tool, str(target)])
+        for link in links:
+            path = out / link
+            if path.is_symlink() or path.exists():
+                path.unlink()
+            path.symlink_to(name)
+        egl_results.append(target)
+
     icd_result = out / "intel_icd.x86_64.json"
     icd_json = '{\n    "ICD": {\n        "api_version": "1.3.204",\n        "library_path": "libvulkan_intel.so"\n    },\n    "file_format_version": "1.0.0"\n}\n'
     icd_result.write_text(icd_json)
