@@ -10,6 +10,7 @@
 #include "driver.h"
 #include "device.h"
 #include "lock.h"
+#include "IntelGfxABI.h"
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -382,6 +383,14 @@ extern "C" status_t
 init_driver(void)
 {
 	CALLED();
+
+	// Say which build this is and what it will let a client hold. Two copies
+	// of this driver can be installed at once, one from the package and one in
+	// non-packaged, and nothing else in the log tells them apart: a limit that
+	// appears not to have changed looks exactly like a driver that was never
+	// loaded.
+	dprintf("intel_gfx: driver loaded, client memory limit %" B_PRIu64 " MB\n",
+		IntelGfx::kClientMemoryLimit / (1024 * 1024));
 
 	status_t status = get_module(B_PCI_MODULE_NAME, (module_info**)&gPCI);
 	if (status != B_OK) {

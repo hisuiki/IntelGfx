@@ -9,7 +9,14 @@ namespace IntelGfx {
 
 static const uint32_t kABIVersion = 8;
 static const uint64_t kMaxBufferSize = 64ULL * 1024 * 1024;
-static const uint64_t kClientMemoryLimit = 256ULL * 1024 * 1024;
+// What one client may hold in system memory at once. A browser compositing a
+// long image-heavy page reaches a quarter of a gigabyte without doing anything
+// unreasonable, and the allocation that fails past this point is not recovered
+// from gracefully: Mesa reports it as an out-of-memory to its caller, and
+// Firefox answers that by turning off hardware rendering for the rest of the
+// session. The buffers are wired, so this is not free, but a limit low enough
+// to be reached during ordinary browsing costs far more than the memory does.
+static const uint64_t kClientMemoryLimit = 1024ULL * 1024 * 1024;
 // Global GTT space is a scarce device resource shared with the display, so a
 // client may pin far less of it than it may allocate in system memory.
 static const uint64_t kClientApertureLimit = 64ULL * 1024 * 1024;
