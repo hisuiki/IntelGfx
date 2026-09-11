@@ -23,8 +23,31 @@
 
 using namespace IntelGfx;
 namespace {
-struct Buffer { area_id area; uint64_t size, address; uint32_t tiling; };
+struct Buffer {
+ area_id area; uint64_t size, address; uint32_t tiling;
+ // Iris does not close a buffer it has finished with: it keeps the handle in
+ // its own cache, marks it purgeable with madvise(DONTNEED) and asks for it
+ // back later with WILLNEED. On i915 the kernel is free to drop a purgeable
+ // buffer's pages, and the WILLNEED that finds it gone answers retained = 0,
+ // which is how Iris learns to allocate a fresh one instead. Keep the same
+ // state here, because the driver charges every cached handle against this
+ // client's buffer-slot and memory limits: with nothing ever purged the cache
+ // only grows, and the allocation that eventually fails makes WebRender fall
+ // back to software rendering for the rest of the session.
+ bool purgeable, purged;
+ uint64_t stamp;
+};
 struct Sync { int fd; bool signaled; };
+// Orders purgeable buffers so reclaim starts with the ones Iris has left alone
+// the longest.
+uint64_t purgeClock = 0;
+// Reclaim several buffers at once rather than one per failed allocation, which
+// would leave us sitting at the limit paying a failed ioctl for every alloc.
+static const uint32_t kReclaimBatch = 16;
+// How many buffers the cache may hold before it is trimmed anyway. The client's
+// whole table is kMaxBuffers entries and the live compositor needs most of
+// them, so the cache does not get to keep a large share of it.
+static const uint32_t kMaxCached = 64;
 std::mutex lock;
 std::condition_variable changed;
 std::map<std::pair<int, uint32_t>, Buffer> buffers;
@@ -49,6 +72,38 @@ Buffer* buffer(int fd, uint32_t handle)
 {
  auto it = buffers.find({fd, handle});
  return it == buffers.end() ? NULL : &it->second;
+}
+// Hand the driver back the buffers Iris has marked purgeable, oldest first,
+// until at least `bytes` and `count` buffers' worth of the client's limits are
+// free again. The map entry stays behind marked purged: Iris reads retained
+// out of its own request structure, which it initialises to 1, so a madvise
+// that failed outright would read as "still there" and it would go on using a
+// buffer that no longer exists. Only an explicit retained = 0 makes it let go.
+uint32_t reclaim(int fd, uint64_t bytes, uint32_t count)
+{
+ uint64_t freed = 0;
+ uint32_t purged = 0;
+ while (purged < count || freed < bytes) {
+  Buffer* oldest = NULL;
+  uint32_t handle = 0;
+  for (auto& entry : buffers) {
+   if (entry.first.first != fd) continue;
+   Buffer& bo = entry.second;
+   if (!bo.purgeable || bo.purged) continue;
+   if (oldest == NULL || bo.stamp < oldest->stamp) {
+    oldest = &bo; handle = entry.first.second;
+   }
+  }
+  if (oldest == NULL) break;
+  auto close = Request<CloseBuffer>(); close.handle = handle;
+  if (call(fd, kCloseBuffer, close) < 0) break;
+  oldest->purged = true;
+  oldest->address = 0;
+  oldest->area = -1;
+  freed += oldest->size;
+  purged++;
+ }
+ return purged;
 }
 int reg(int fd, uint32_t offset, uint32_t& value)
 {
@@ -152,14 +207,44 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
  case DRM_IOCTL_I915_GEM_CREATE: {
   auto& r = *(drm_i915_gem_create*)data;
   auto create = Request<CreateBuffer>(); create.size = r.size;
-  if (call(fd, kCreateBuffer, create) < 0) return -1;
-  buffers[{fd, create.handle}] = {create.area, create.size, 0, 0};
+  if (call(fd, kCreateBuffer, create) < 0) {
+   // Everything Iris has cached is still charged to this client, so a
+   // refusal here usually means the cache has taken the whole allowance
+   // rather than that the device is out of memory. Give some of it back
+   // and ask again: Iris answers a failed allocation by disabling
+   // hardware rendering for the rest of the session, which is far more
+   // expensive than the reclaim.
+   uint32_t live = 0, cached = 0;
+   uint64_t bytes = 0;
+   for (auto& entry : buffers) {
+    if (entry.first.first != fd || entry.second.purged) continue;
+    live++; bytes += entry.second.size;
+    if (entry.second.purgeable) cached++;
+   }
+   uint32_t freed = reclaim(fd, r.size, kReclaimBatch);
+   // Both limits the driver enforces answer with the same error, so say
+   // which one the client was actually up against.
+   fprintf(stderr, "IntelGfx: allocation of %" PRIu64 " bytes refused with "
+    "%" PRIu32 " buffers live (%" PRIu32 " cached) using %" PRIu64
+    " bytes; reclaimed %" PRIu32 "\n",
+    (uint64_t)r.size, live, cached, bytes, freed);
+   if (freed == 0) return -1;
+   create = Request<CreateBuffer>(); create.size = r.size;
+   if (call(fd, kCreateBuffer, create) < 0) return -1;
+  }
+  buffers[{fd, create.handle}] = {create.area, create.size, 0, 0, false, false, 0};
   r.handle = create.handle; r.size = create.size; return 0;
  }
  case DRM_IOCTL_GEM_CLOSE: {
   auto& r = *(drm_gem_close*)data;
-  auto close = Request<CloseBuffer>(); close.handle = r.handle;
-  if (call(fd, kCloseBuffer, close) < 0) return -1;
+  Buffer* bo = buffer(fd, r.handle);
+  if (!bo) return fail(EINVAL);
+  // A reclaimed buffer is already gone from the driver; all that is left is
+  // the record kept so madvise could report it purged.
+  if (!bo->purged) {
+   auto close = Request<CloseBuffer>(); close.handle = r.handle;
+   if (call(fd, kCloseBuffer, close) < 0) return -1;
+  }
   buffers.erase({fd, r.handle}); return 0;
  }
  case DRM_IOCTL_I915_GEM_MMAP: {
@@ -183,8 +268,23 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
  }
  case DRM_IOCTL_I915_GEM_MADVISE: {
   auto& r = *(drm_i915_gem_madvise*)data;
-  if (!buffer(fd, r.handle)) return fail(EINVAL);
-  r.retained = 1; return 0; // Locked areas are retained, never purged.
+  Buffer* bo = buffer(fd, r.handle);
+  if (!bo) return fail(EINVAL);
+  if (bo->purged) { r.retained = 0; return 0; }
+  bo->purgeable = r.madv == I915_MADV_DONTNEED;
+  if (!bo->purgeable) { r.retained = 1; return 0; }
+  bo->stamp = ++purgeClock;
+  // Trim the cache on the way past the watermark instead of waiting for an
+  // allocation to fail, so the limit is approached gently and the buffers
+  // still in use keep their slots.
+  uint32_t cached = 0;
+  for (auto& entry : buffers) {
+   if (entry.first.first == fd && entry.second.purgeable
+    && !entry.second.purged)
+    cached++;
+  }
+  if (cached > kMaxCached) reclaim(fd, 0, cached - kMaxCached);
+  r.retained = bo->purged ? 0 : 1; return 0;
  }
  case DRM_IOCTL_I915_GEM_SET_DOMAIN: {
   auto& r = *(drm_i915_gem_set_domain*)data;
@@ -331,21 +431,58 @@ intel_haiku_ioctl(int fd, unsigned long op, void* data)
   submit.context = r.rsvd1; submit.batchHandle = objects[batchIndex].handle;
   submit.offset = r.batch_start_offset; submit.length = length;
   submit.count = r.buffer_count;
+  // Iris reassigns virtual addresses freely between submissions, so a buffer's
+  // new home is often still occupied by a different buffer bound during an
+  // earlier one. The kernel refuses an overlapping bind with B_BUSY, and as
+  // noted above Iris answers a failed submission by signalling a batch syncobj
+  // it never created, so the process aborts far from here. Only the buffer
+  // whose own address changed used to be unbound, which leaves exactly those
+  // stale neighbours in place; evict every binding that overlaps the layout
+  // this submission asks for before binding any of it.
+  for (uint32_t i = 0; i < r.buffer_count; i++) {
+   Buffer* bo = buffer(fd, objects[i].handle);
+   if (!bo) return fail(EINVAL);
+   uint64_t start = objects[i].offset, end = start + bo->size;
+   // A buffer that is staying where it already is cannot have acquired a new
+   // neighbour: the driver refuses any bind that overlaps a live one, so the
+   // range is already known to be clear. Only a buffer that is moving needs
+   // the sweep, which in a steady frame is almost none of them.
+   if (bo->address == start) continue;
+   for (auto& entry : buffers) {
+    if (entry.first.first != fd) continue;
+    Buffer& other = entry.second;
+    if (&other == bo || other.address == 0) continue;
+    if (start < other.address + other.size && other.address < end) {
+     auto evict = Request<UnbindBuffer>(); evict.handle = entry.first.second;
+     if (call(fd, kUnbindVirtual, evict) < 0)
+      return submitFailed("unbind", entry.first.second);
+     other.address = 0;
+    }
+   }
+  }
+
   for (uint32_t i = 0; i < r.buffer_count; i++) {
    Buffer* bo = buffer(fd, objects[i].handle);
    if (!bo || objects[i].relocation_count) return fail(EINVAL);
    uint64_t address = objects[i].offset;
-   if (bo->address && bo->address != address) {
-    auto unbind = Request<UnbindBuffer>(); unbind.handle = objects[i].handle;
-    if (call(fd, kUnbindVirtual, unbind) < 0)
-     return submitFailed("unbind", objects[i].handle);
-    bo->address = 0;
+   // Iris names every buffer a batch touches on each submission, but between
+   // frames it usually leaves them where they were. Rebinding one to the
+   // address it already has is a syscall the driver answers by doing nothing,
+   // and there is one of them per buffer per frame, so skip it here instead.
+   if (bo->address != address) {
+    if (bo->address) {
+     auto unbind = Request<UnbindBuffer>(); unbind.handle = objects[i].handle;
+     if (call(fd, kUnbindVirtual, unbind) < 0)
+      return submitFailed("unbind", objects[i].handle);
+     bo->address = 0;
+    }
+    auto bind = Request<BindVirtual>(); bind.handle = objects[i].handle;
+    bind.address = address;
+    if (call(fd, kBindVirtual, bind) < 0)
+     return submitFailed("bind", objects[i].handle);
+    bo->address = address;
    }
-   auto bind = Request<BindVirtual>(); bind.handle = objects[i].handle;
-   bind.address = address;
-   if (call(fd, kBindVirtual, bind) < 0)
-    return submitFailed("bind", objects[i].handle);
-   bo->address = address; submit.handles[i] = objects[i].handle;
+   submit.handles[i] = objects[i].handle;
   }
   // Keep the adapter lock through the synchronous ioctl: BO destruction,
   // fd reuse and CPU fence signaling cannot race GPU completion.
