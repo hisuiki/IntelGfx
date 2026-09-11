@@ -75,10 +75,93 @@ RenderClient::_GpuTicks() const
 }
 
 
+// How long a report waits for a busy client before using what it said last
+// time. The callers are ActivityMonitor and the Deskbar replicant, whose
+// threads draw windows, and a client holds its lock for a whole submission --
+// up to the idle timeout if the GPU has stopped answering.
+static const bigtime_t kActivityLockTimeout = 20000;
+
+
+// Report GPU time for every client of the device.
+//
+// This takes the client list and then each client's lock, so it must not be
+// entered holding a client lock -- which is why Ioctl dispatches it before
+// taking its own. It used to run under the caller's lock: two processes polling
+// at once each held their own lock and waited for the other's, and every
+// poller after them queued up behind the pair for good.
+status_t
+RenderClient::_GpuActivity(void* userBuffer, size_t length)
+{
+	GpuActivity request;
+	status_t status = ReadRequest(userBuffer, length, request);
+	if (status != B_OK)
+		return status;
+
+	// The total covers every engine, so blitter-only workloads are visible
+	// too. Each engine's TotalGpuTicks is the sum across every context that
+	// has ever run on that engine's scheduler. The engines are fixed when the
+	// client is created, so reading them needs no lock.
+	request = Request<GpuActivity>();
+	request.timestampHz = kGpuTimestampHz;
+	request.totalTicks = 0;
+	bool hasEngine = false;
+	for (uint32 i = 0; i < B_COUNT_OF(fEngines); i++) {
+		if (fEngines[i] != NULL && fEngines[i]->IsReady()) {
+			request.totalTicks += fEngines[i]->TotalGpuTicks();
+			hasEngine = true;
+		}
+	}
+	if (!hasEngine)
+		return B_NOT_SUPPORTED;
+
+	MutexLocker clients(&sClientsLock);
+	for (uint32 i = 0; i < kMaxActivityClients; i++) {
+		RenderClient* client = sClients[i];
+		if (client == NULL)
+			continue;
+		// A client in the middle of a submission holds its lock until the GPU
+		// has finished; report what it said last time rather than keep a
+		// window from drawing until then.
+		if (mutex_lock_with_timeout(&client->fLock, B_RELATIVE_TIMEOUT,
+				kActivityLockTimeout) == B_OK) {
+			uint32 contexts = 0;
+			if (client->fNative != NULL) {
+				for (uint32 c = 0; c < kMaxContexts; c++) {
+					if (client->fNative->contexts[c] != NULL)
+						contexts++;
+				}
+			}
+			client->fReportedTicks = client->_GpuTicks();
+			client->fReportedContexts = contexts;
+			mutex_unlock(&client->fLock);
+		}
+
+		// A process can open the render node more than once (Vulkan does
+		// this routinely). Report one accumulated entry per team so every
+		// consumer sees processes rather than driver file handles.
+		ActivityClient* entry = NULL;
+		for (uint32 j = 0; j < request.count; j++) {
+			if (request.clients[j].team == client->fTeam) {
+				entry = &request.clients[j];
+				break;
+			}
+		}
+		if (entry == NULL) {
+			entry = &request.clients[request.count++];
+			entry->team = client->fTeam;
+		}
+		entry->contexts += client->fReportedContexts;
+		entry->ticks += client->fReportedTicks;
+	}
+	clients.Unlock();
+	return user_memcpy(userBuffer, &request, sizeof(request));
+}
+
+
 RenderClient::RenderClient(intel_info* device, const DeviceInfo& info,
 	GlobalGTT* gtt, RenderEngine* blitter, RenderEngine* render)
 	: fNative(NULL), fDevice(device), fInfo(info), fGTT(gtt), fNextHandle(1),
-	fAllocated(0), fBound(0)
+	fAllocated(0), fBound(0), fReportedTicks(0), fReportedContexts(0)
 {
 	fEngines[0] = NULL;
 	fEngines[1] = NULL;
@@ -223,6 +306,10 @@ RenderClient::_FlushObjects(const SubmitObjects& request)
 status_t
 RenderClient::Ioctl(uint32 operation, void* userBuffer, size_t length)
 {
+	// Answered without this client's lock: see _GpuActivity for why.
+	if (operation == kGpuActivity)
+		return _GpuActivity(userBuffer, length);
+
 	MutexLocker locker(&fLock);
 	if (fNative != NULL && fNative->faulted && operation != kGetInfo
 		&& operation != kEngineStatus)
@@ -640,72 +727,6 @@ RenderClient::_NativeIoctl(uint32 operation, void* userBuffer, size_t length)
 			fNative->tiling[slot] = request.tiling;
 			fNative->stride[slot] = request.stride;
 			return B_OK;
-		}
-		case kGpuActivity: {
-			GpuActivity request;
-			status_t status = ReadRequest(userBuffer, length, request);
-			if (status != B_OK)
-				return status;
-			// The total covers every engine, so blitter-only workloads are
-			// visible too. Each engine's TotalGpuTicks is the sum across
-			// every context that has ever run on that engine's scheduler.
-			request = Request<GpuActivity>();
-			request.timestampHz = kGpuTimestampHz;
-			request.totalTicks = 0;
-			bool hasEngine = false;
-			for (uint32 i = 0; i < B_COUNT_OF(fEngines); i++) {
-				if (fEngines[i] != NULL && fEngines[i]->IsReady()) {
-					request.totalTicks += fEngines[i]->TotalGpuTicks();
-					hasEngine = true;
-				}
-			}
-			if (!hasEngine)
-				return B_NOT_SUPPORTED;
-			// Reporting on the other clients needs their locks, and this one
-			// already holds its own, so only ever take theirs after it.
-			MutexLocker clients(&sClientsLock);
-			for (uint32 i = 0; i < kMaxActivityClients; i++) {
-				RenderClient* client = sClients[i];
-				if (client == NULL)
-					continue;
-				uint64 ticks;
-				uint32 contexts = 0;
-				if (client == this) {
-					ticks = _GpuTicks();
-					if (fNative != NULL) {
-						for (uint32 c = 0; c < kMaxContexts; c++) {
-							if (fNative->contexts[c] != NULL)
-								contexts++;
-						}
-					}
-				} else {
-					MutexLocker other(&client->fLock);
-					ticks = client->_GpuTicks();
-					if (client->fNative != NULL) {
-						for (uint32 c = 0; c < kMaxContexts; c++) {
-							if (client->fNative->contexts[c] != NULL)
-								contexts++;
-						}
-					}
-				}
-				// A process can open the render node more than once (Vulkan does
-				// this routinely). Report one accumulated entry per team so every
-				// consumer sees processes rather than driver file handles.
-				ActivityClient* entry = NULL;
-				for (uint32 j = 0; j < request.count; j++) {
-					if (request.clients[j].team == client->fTeam) {
-						entry = &request.clients[j];
-						break;
-					}
-				}
-				if (entry == NULL) {
-					entry = &request.clients[request.count++];
-					entry->team = client->fTeam;
-				}
-				entry->contexts += contexts;
-				entry->ticks += ticks;
-			}
-			return user_memcpy(userBuffer, &request, sizeof(request));
 		}
 		case kGetTopology: {
 			Topology request;
